@@ -1,0 +1,39 @@
+name: PolyBot Signal Check
+
+on:
+  schedule:
+    # รันทุก 5 นาที (GitHub Actions ขั้นต่ำคือ 5 นาที)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # รันมือได้จาก Actions tab
+
+jobs:
+  check-signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run signal check
+        env:
+          SYMBOL: ${{ vars.SYMBOL || 'BTCUSDT' }}
+          TIMEFRAME: '5'
+          TIMEFRAME_MINUTES: '5'
+          OHLCV_LIMIT: '250'
+          MAX_RECOVERY_BARS: ${{ vars.MAX_RECOVERY_BARS || '3' }}
+          NOTIFY_CHANNEL: ${{ vars.NOTIFY_CHANNEL || 'telegram' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LINE_NOTIFY_TOKEN: ${{ secrets.LINE_NOTIFY_TOKEN }}
+          DRY_RUN: 'false'
+          TZ_OFFSET_HOURS: '7'
+        run: python check_signal.py
