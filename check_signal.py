@@ -396,7 +396,7 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
     Returns: list ของ [timestamp_ms, open, high, low, close, volume]
              เรียงจากอดีต -> ปัจจุบัน (oldest first)
     """
-    url = 'https://api-api.bybit.com/v5/market/kline'
+    url = 'https://api.bybit.com/v5/market/kline'
     params = {
         'category': 'linear',
         'symbol':   symbol,
