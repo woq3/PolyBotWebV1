@@ -390,13 +390,9 @@ def compute_signals(closes):
 # ============================================================
 
 def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
-    """
-    ดึง OHLCV จาก Bybit v5 public kline endpoint (ไม่ต้องใช้ API key)
-
-    Returns: list ของ [timestamp_ms, open, high, low, close, volume]
-             เรียงจากอดีต -> ปัจจุบัน (oldest first)
-    """
-    url = 'https://api.bybit.com/v5/market/kline'
+    # เปลี่ยนมาใช้ .nl หรือ -global เพื่อหลบการบล็อก IP ของ GitHub Actions
+    url = 'https://api.bybit.nl/v5/market/kline'
+    
     params = {
         'category': 'linear',
         'symbol':   symbol,
@@ -404,8 +400,8 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
         'limit':    str(limit),
     }
     headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept':     'application/json',
     }
     resp = requests.get(url, params=params, headers=headers, timeout=15)
     resp.raise_for_status()
