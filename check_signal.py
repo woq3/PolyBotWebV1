@@ -1,6 +1,6 @@
 """
 ================================================================================
- Pine Script v5  ->  Python Translation  for  Vercel Cron Jobs
+ Pine Script v5  ->  Python  ->  GitHub Actions Cron
  Indicator : cRSI + Stoch RSI | Multi-Bar Win Report (Max WinRate)
  Alert     : Telegram (primary) + LINE Notify (optional)
  Exchange  : Bybit v5 Public API (no auth needed)
@@ -21,11 +21,11 @@
 #  Imports
 # ============================================================
 import os
+import sys
 import json
 import math
 import time
 import requests
-from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 
 
@@ -34,25 +34,25 @@ from datetime import datetime, timezone, timedelta
 # ============================================================
 # --- Exchange ---
 EXCHANGE          = os.environ.get('EXCHANGE', 'bybit')
-SYMBOL            = os.environ.get('SYMBOL', 'BTCUSDT')        # Bybit linear symbol
-TIMEFRAME         = os.environ.get('TIMEFRAME', '15')           # Bybit interval string
+SYMBOL            = os.environ.get('SYMBOL', 'BTCUSDT')
+TIMEFRAME         = os.environ.get('TIMEFRAME', '15')
 TIMEFRAME_MINUTES = int(os.environ.get('TIMEFRAME_MINUTES', '15'))
-OHLCV_LIMIT       = int(os.environ.get('OHLCV_LIMIT', '250'))   # >= 200 for warmup
+OHLCV_LIMIT       = int(os.environ.get('OHLCV_LIMIT', '250'))
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID   = os.environ.get('TELEGRAM_CHAT_ID', '')
 
-# --- LINE Notify (optional, ใช้ถ้าไม่ได้ใช้ Telegram) ---
+# --- LINE Notify (optional) ---
 LINE_NOTIFY_TOKEN  = os.environ.get('LINE_NOTIFY_TOKEN', '')
 
-# --- Notification channel: 'telegram' (default) | 'line' | 'both' ---
+# --- Notification channel: 'telegram' | 'line' | 'both' ---
 NOTIFY_CHANNEL     = os.environ.get('NOTIFY_CHANNEL', 'telegram')
 
 # --- Dry run (ทดสอบโดยไม่ส่งแจ้งเตือนจริง) ---
 DRY_RUN            = os.environ.get('DRY_RUN', 'false').lower() == 'true'
 
-# --- Timezone สำหรับแสดงเวลาในข้อความ (default: Asia/Bangkok UTC+7) ---
+# --- Timezone offset (ชม.) สำหรับแสดงเวลาในข้อความ (default 7 = Bangkok) ---
 DISPLAY_TZ_OFFSET_HOURS = int(os.environ.get('TZ_OFFSET_HOURS', '7'))
 
 
@@ -79,7 +79,7 @@ STOCH_HIGH  = 90
 # ============================================================
 
 def is_nan(v):
-    """ตรวจว่าค่าเป็น NaN หรือ None (ปลอดภัยกับทุก type)"""
+    """ตรวจว่าค่าเป็น NaN หรือ None"""
     if v is None:
         return True
     if isinstance(v, float):
@@ -102,14 +102,13 @@ def calc_rma(values, length):
     """
     Wilder's RMA (Modified Moving Average)  - ตรงกับ Pine ta.rma()
        alpha = 1 / length        (** ไม่ใช่ 2/(length+1) แบบ EMA **)
-       seed  = SMA ของ `length` ค่าแรกที่ไม่ใช่ NaN
+       seed  = SMA ของ `length` ค่าแรกที่ไม่ใช่ NaN ติดต่อกัน
        rma[i] = alpha * values[i] + (1 - alpha) * rma[i-1]
     คืน list ที่มี NaN ในช่วง warmup
     """
     n = len(values)
     rma = [float('nan')] * n
 
-    # หาหน้าต่าง `length` ค่าแรกที่ไม่ใช่ NaN ติดต่อกัน
     count = 0
     start_idx = -1
     for i in range(n):
@@ -119,21 +118,21 @@ def calc_rma(values, length):
                 start_idx = i
                 break
         else:
-            count = 0  # reset เมื่อเจอ NaN
+            count = 0
 
     if start_idx == -1:
-        return rma  # ข้อมูลไม่พอ
+        return rma
 
     # SMA seed
     window = values[start_idx - length + 1 : start_idx + 1]
     rma[start_idx] = sum(window) / length
 
-    # Recursive formula  (bar-by-bar)
+    # Recursive formula (bar-by-bar, ห้าม vectorize)
     alpha = 1.0 / length
     for i in range(start_idx + 1, n):
         v = values[i]
         if is_nan(v):
-            rma[i] = rma[i - 1]   # carry forward
+            rma[i] = rma[i - 1]
         else:
             rma[i] = alpha * v + (1.0 - alpha) * rma[i - 1]
     return rma
@@ -161,13 +160,10 @@ def calc_rsi(src, length):
     """
     n = len(src)
 
-    # change[0] = NaN, change[i] = src[i] - src[i-1]
     change = [float('nan')] * n
     for i in range(1, n):
         change[i] = src[i] - src[i - 1]
 
-    # up_src   = max(change, 0)   (NaN คงเป็น NaN)
-    # down_src = max(-change, 0)
     up_src   = [float('nan') if is_nan(c) else max(c, 0.0)  for c in change]
     down_src = [float('nan') if is_nan(c) else max(-c, 0.0) for c in change]
 
@@ -205,7 +201,7 @@ def calc_stoch(source, length):
         lowest  = min(valid)
         highest = max(valid)
         if highest == lowest:
-            stoch[i] = 100.0   # edge case: ค่าเท่ากันหมด
+            stoch[i] = 100.0
         else:
             stoch[i] = 100.0 * (source[i] - lowest) / (highest - lowest)
     return stoch
@@ -230,8 +226,8 @@ def compute_signals(closes):
     phasingLag = int((VIBRATION - 1) / 2)            # = 4   (Pine int())
     aperc      = LEVELING / 100.0                    # = 0.07
 
-    # -------- [1] RSI สำหรับ cRSI (ใช้ cyclelen=7) --------
-    change    = [float('nan')] * n
+    # -------- [1] RSI สำหรับ cRSI (cyclelen=7) --------
+    change = [float('nan')] * n
     for i in range(1, n):
         change[i] = src[i] - src[i - 1]
 
@@ -263,24 +259,18 @@ def compute_signals(closes):
         rsi_lag = rsi[i - phasingLag] if (i - phasingLag) >= 0 else float('nan')
 
         if is_nan(rsi_now) or is_nan(rsi_lag):
-            crsi[i] = float('nan')          # Pine: NaN propagates
+            crsi[i] = float('nan')
         else:
-            # nz(crsi[1]) : ที่ bar 0 อ้างถึง bar -1 = NaN -> nz -> 0
             prev      = crsi[i - 1] if i > 0 else float('nan')
             prev_nz   = 0.0 if is_nan(prev) else prev
             crsi[i]   = torque * (2.0 * rsi_now - rsi_lag) + (1.0 - torque) * prev_nz
 
     # -------- [3] db & ub (var float, bar-by-bar) --------
-    # ลอจิก Pine:
-    #   lmax = max(crsi[0..cyclicmemory-1])  ; lmin = min(...)
-    #   mstep = (lmax - lmin) / 100
-    #   db = ค่า testvalue ต่ำสุด (จาก lmin ขึ้นไป) ที่มี >= aperc ของ crsi อยู่ใต้
-    #   ub = ค่า testvalue สูงสุด (จาก lmax ลงลง) ที่มี >= aperc ของ crsi อยู่เหนือ/เท่ากับ
-    db = [0.0] * n        # var float db = 0.0
-    ub = [0.0] * n        # var float ub = 0.0
+    db = [0.0] * n
+    ub = [0.0] * n
 
     for i in range(n):
-        # --- หา lmax / lmin ในหน้าต่าง cyclicmemory ---
+        # หา lmax / lmin ในหน้าต่าง cyclicmemory
         lmax = -999999.0
         lmin =  999999.0
         for j in range(CYCLICMEMORY):
@@ -288,7 +278,6 @@ def compute_signals(closes):
             if idx < 0:
                 break
             v = crsi[idx]
-            # nz(crsi[j], -999999) สำหรับ lmax  /  nz(crsi[j], 999999) สำหรับ lmin
             v_for_max = v if not is_nan(v) else -999999.0
             v_for_min = v if not is_nan(v) else  999999.0
             if v_for_max > lmax:
@@ -296,7 +285,6 @@ def compute_signals(closes):
             if v_for_min < lmin:
                 lmin = v_for_min
 
-        # กรณีข้อมูลยังเป็น NaN ทั้งหมด -> ใช้ค่า bar ก่อนหน้า
         if lmax == -999999.0 or lmin == 999999.0:
             if i > 0:
                 db[i] = db[i - 1]
@@ -305,7 +293,7 @@ def compute_signals(closes):
 
         mstep = (lmax - lmin) / 100.0
 
-        # --- db: scan จาก lmin ขึ้นไป หา testvalue แรกที่ below/cyclicmemory >= aperc ---
+        # db: scan จาก lmin ขึ้นไป หา testvalue แรกที่ below/cyclicmemory >= aperc
         db_found = False
         for step in range(101):
             testvalue = lmin + mstep * step
@@ -324,7 +312,7 @@ def compute_signals(closes):
         if not db_found:
             db[i] = db[i - 1] if i > 0 else 0.0
 
-        # --- ub: scan จาก lmax ลงลง หา testvalue แรกที่ above/cyclicmemory >= aperc ---
+        # ub: scan จาก lmax ลงลง หา testvalue แรกที่ above/cyclicmemory >= aperc
         ub_found = False
         for step in range(101):
             testvalue = lmax - mstep * step
@@ -353,7 +341,6 @@ def compute_signals(closes):
     d         = calc_sma(k, SMOOTHD)
 
     # -------- [5] last_stoch_k_crossup / crossdown (var float) --------
-    # อัปเดตเมื่อเกิด crossover/crossunder ของ k กับ d
     last_crossup   = [0.0] * n
     last_crossdown = [0.0] * n
 
@@ -364,15 +351,15 @@ def compute_signals(closes):
         if i == 0:
             continue
 
-        k_now,  k_prev = k[i], k[i - 1]
-        d_now,  d_prev = d[i], d[i - 1]
+        k_now, k_prev = k[i], k[i - 1]
+        d_now, d_prev = d[i], d[i - 1]
         if any(is_nan(x) for x in (k_now, k_prev, d_now, d_prev)):
             continue
 
-        # ta.crossover(k, d)  : k_now > d_now  AND  k_prev <= d_prev
+        # ta.crossover(k, d)
         if k_now > d_now and k_prev <= d_prev:
             last_crossup[i] = k_now
-        # ta.crossunder(k, d) : k_now < d_now  AND  k_prev >= d_prev
+        # ta.crossunder(k, d)
         if k_now < d_now and k_prev >= d_prev:
             last_crossdown[i] = k_now
 
@@ -383,22 +370,20 @@ def compute_signals(closes):
     sell_signals = [False] * n
 
     for i in range(1, n):
-        crsi_now,  crsi_prev = crsi[i], crsi[i - 1]
-        db_now,    db_prev   = db[i],   db[i - 1]
-        ub_now,    ub_prev   = ub[i],   ub[i - 1]
-        k_now                = k[i]
-        last_up              = last_crossup[i]
-        last_down            = last_crossdown[i]
+        crsi_now, crsi_prev = crsi[i], crsi[i - 1]
+        db_now,   db_prev   = db[i],   db[i - 1]
+        ub_now,   ub_prev   = ub[i],   ub[i - 1]
+        k_now               = k[i]
+        last_up             = last_crossup[i]
+        last_down           = last_crossdown[i]
 
         if any(is_nan(x) for x in (crsi_now, crsi_prev, db_now, db_prev, k_now)):
             continue
 
-        # crossover(crsi, db)
         if (crsi_now > db_now) and (crsi_prev <= db_prev):
             if last_up < STOCH_LOW and k_now < STOCH_LOW:
                 buy_signals[i] = True
 
-        # crossunder(crsi, ub)
         if (crsi_now < ub_now) and (crsi_prev >= ub_prev):
             if last_down > STOCH_HIGH and k_now > STOCH_HIGH:
                 sell_signals[i] = True
@@ -432,11 +417,11 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
     params = {
         'category': 'linear',
         'symbol':   symbol,
-        'interval': str(interval),     # '1','5','15','60','240','D',...
+        'interval': str(interval),
         'limit':    str(limit),
     }
     headers = {
-        'User-Agent': 'Mozilla/5.0 (VercelCron-SignalBot)',
+        'User-Agent': 'Mozilla/5.0 (GitHub-Actions-SignalBot)',
         'Accept':     'application/json',
     }
     resp = requests.get(url, params=params, headers=headers, timeout=15)
@@ -488,10 +473,11 @@ def get_last_closed_bar_index(ohlcv, timeframe_minutes=TIMEFRAME_MINUTES):
 def send_telegram(message):
     """ส่งข้อความเข้า Telegram ผ่าน Bot API"""
     if DRY_RUN:
-        print('[DRY-RUN] Telegram message:\n' + message)
+        print('[DRY-RUN] Telegram message:')
+        print(message)
         return True
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print('[WARN] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID ไม่ได้ตั้ง - ข้ามการส่ง Telegram')
+        print('[WARN] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID ไม่ได้ตั้ง - ข้าม')
         return False
 
     url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
@@ -516,10 +502,11 @@ def send_telegram(message):
 def send_line_notify(message):
     """ส่งข้อความเข้า LINE Notify"""
     if DRY_RUN:
-        print('[DRY-RUN] LINE message:\n' + message)
+        print('[DRY-RUN] LINE message:')
+        print(message)
         return True
     if not LINE_NOTIFY_TOKEN:
-        print('[WARN] LINE_NOTIFY_TOKEN ไม่ได้ตั้ง - ข้ามการส่ง LINE')
+        print('[WARN] LINE_NOTIFY_TOKEN ไม่ได้ตั้ง - ข้าม')
         return False
 
     url = 'https://notify-api.line.me/api/notify'
@@ -563,6 +550,7 @@ def run_signal_check():
       3. ตรวจแท่งปิดล่าสุด -> ส่งแจ้งเตือนถ้ามีสัญญาณ
     """
     print(f'[INFO] เริ่มตรวจสัญญาณ: {SYMBOL} {TIMEFRAME_MINUTES}m  (limit={OHLCV_LIMIT})')
+    print(f'[INFO] DRY_RUN={DRY_RUN}  NOTIFY_CHANNEL={NOTIFY_CHANNEL}')
 
     # 1) Fetch
     ohlcv = fetch_ohlcv_bybit()
@@ -593,21 +581,22 @@ def run_signal_check():
 
     # 4) ส่งแจ้งเตือนถ้ามีสัญญาณ
     signal_type = None
-    emoji       = '⚪'
+    emoji       = ''
     if buy:
-        signal_type, emoji = 'BUY',  '🟢'
+        signal_type, emoji = 'BUY',  '[BUY]'
     elif sell:
-        signal_type, emoji = 'SELL', '🔴'
+        signal_type, emoji = 'SELL', '[SELL]'
 
     if signal_type:
+        # Telegram HTML format (LINE Notify จะ strip HTML tags อัตโนมัติ)
         msg = (
             f"{emoji} <b>{signal_type} SIGNAL</b>\n"
-            f"━━━━━━━━━━━━━━━\n"
+            f"---------------------------\n"
             f"Symbol : <b>{SYMBOL}</b>\n"
             f"TF     : {TIMEFRAME_MINUTES}m\n"
             f"Bar    : {bar_time_str}\n"
             f"Close  : {bar_close:,.2f}\n"
-            f"━━━━━━━━━━━━━━━\n"
+            f"---------------------------\n"
             f"cRSI   : {nz(result['crsi'][idx], 0):.4f}\n"
             f"db     : {nz(result['db'][idx], 0):.4f}\n"
             f"ub     : {nz(result['ub'][idx], 0):.4f}\n"
@@ -618,11 +607,15 @@ def run_signal_check():
         )
         notify(msg)
 
-    # 5) สรุปผลลัพธ์
-    return {
-        'symbol':     SYMBOL,
-        'timeframe':  f'{TIMEFRAME_MINUTES}m',
-        'bars_analyzed': len(ohlcv),
+    # 5) สรุปผลลัพธ์ สำหรับ GitHub Actions log
+    print()
+    print('=' * 50)
+    print(f'  Signal Result: {signal_type or "NONE"}')
+    print('=' * 50)
+    print(json.dumps({
+        'symbol':          SYMBOL,
+        'timeframe':       f'{TIMEFRAME_MINUTES}m',
+        'bars_analyzed':   len(ohlcv),
         'last_closed_bar': {
             'index':         idx,
             'timestamp_ms':  bar_time_ms,
@@ -633,77 +626,39 @@ def run_signal_check():
         'buy_signal':  buy,
         'sell_signal': sell,
         'indicators': {
-            'crsi':            nz(result['crsi'][idx], 0),
-            'db':              nz(result['db'][idx], 0),
-            'ub':              nz(result['ub'][idx], 0),
-            'k':               nz(result['k'][idx], 0),
-            'd':               nz(result['d'][idx], 0),
-            'last_crossup':    nz(result['last_crossup'][idx], 0),
-            'last_crossdown':  nz(result['last_crossdown'][idx], 0),
+            'crsi':            round(nz(result['crsi'][idx], 0), 6),
+            'db':              round(nz(result['db'][idx], 0), 6),
+            'ub':              round(nz(result['ub'][idx], 0), 6),
+            'k':               round(nz(result['k'][idx], 0), 6),
+            'd':               round(nz(result['d'][idx], 0), 6),
+            'last_crossup':    round(nz(result['last_crossup'][idx], 0), 6),
+            'last_crossdown':  round(nz(result['last_crossdown'][idx], 0), 6),
         },
+    }, indent=2))
+    print('=' * 50)
+
+    return {
+        'signal':      signal_type or 'NONE',
+        'buy_signal':  buy,
+        'sell_signal': sell,
     }
 
 
 # ============================================================
-#  Vercel Serverless Handler
+#  CLI Entry Point
 # ============================================================
-
-class handler(BaseHTTPRequestHandler):
-    """
-    Vercel Python serverless function
-    trigger ได้ 2 ทาง:
-      - Cron Job (GET /api/check-signal)
-      - เปิด URL ในเบราว์เซอร์เพื่อทดสอบ manual
-    """
-
-    def do_GET(self):
-        self._run()
-
-    def do_POST(self):
-        self._run()
-
-    def do_OPTIONS(self):
-        """CORS preflight"""
-        self.send_response(200)
-        self._send_cors_headers()
-        self.end_headers()
-
-    def _run(self):
-        try:
-            result = run_signal_check()
-            self._send_json(200, {'status': 'ok', 'result': result})
-        except Exception as e:
-            print(f'[ERROR] {e}')
-            import traceback
-            traceback.print_exc()
-            self._send_json(500, {'status': 'error', 'error': str(e)})
-
-    def _send_json(self, status_code, data):
-        body = json.dumps(data, default=str, indent=2).encode('utf-8')
-        self.send_response(status_code)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self._send_cors_headers()
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _send_cors_headers(self):
-        self.send_header('Access-Control-Allow-Origin',  '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-    def log_message(self, fmt, *args):
-        # redirect log ไป stdout (Vercel จะเก็บไว้ใน function logs)
-        print(f"[{self.log_date_time_string()}] {fmt % args}")
+def main():
+    """CLI entry สำหรับรันใน GitHub Actions (หรือ local)"""
+    try:
+        result = run_signal_check()
+        # exit 0 เสมอเมื่อรันสำเร็จ (แม้ไม่มีสัญญาณ) เพื่อไม่ให้ GitHub Actions fail
+        sys.exit(0)
+    except Exception as e:
+        print(f'[FATAL] {e}')
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
-# ============================================================
-#  Local Testing  (รันผ่าน terminal: python api/check-signal.py)
-# ============================================================
 if __name__ == '__main__':
-    print('=' * 60)
-    print('  Local Test Mode  -  รัน check-signal แบบ standalone')
-    print('=' * 60)
-    result = run_signal_check()
-    print('\n' + '=' * 60)
-    print(json.dumps(result, default=str, indent=2))
+    main()

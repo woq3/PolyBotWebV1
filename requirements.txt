@@ -1,6 +1,6 @@
 # ============================================================
-#  Dependencies สำหรับ Vercel Python Serverless Function
-#  ใช้เฉพาะไลบรารีที่จำเป็นจริง ๆ เพื่อ cold start เร็ว
+#  Dependencies สำหรับ GitHub Actions Python runner
+#  ใช้เฉพาะไลบรารีที่จำเป็นจริง ๆ เพื่อให้ install เร็ว
 # ============================================================
 
 # HTTP client สำหรับดึงข้อมูล OHLCV จาก Bybit และส่ง Telegram/LINE
