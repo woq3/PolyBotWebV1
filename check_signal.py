@@ -533,6 +533,29 @@ def notify(message):
 
 
 # ============================================================
+#  State Persistence (Dedupe)
+# ============================================================
+
+STATE_FILE = os.environ.get('STATE_FILE', 'last_signal.json')
+
+def load_last_state():
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def save_last_state(state):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+
+# ============================================================
 #  Main Logic
 # ============================================================
 
@@ -582,27 +605,39 @@ def run_signal_check():
         signal_type, emoji = 'SELL', '[SELL]'
 
     if signal_type:
-        msg = (
-            f"{emoji} <b>{signal_type} SIGNAL</b>\n"
-            f"---------------------------\n"
-            f"Symbol : <b>{SYMBOL}</b>\n"
-            f"TF     : {TIMEFRAME_MINUTES}m\n"
-            f"Bar    : {bar_time_str}\n"
-            f"Close  : {bar_close:,.2f}\n"
-            f"---------------------------\n"
-            f"cRSI   : {nz(result['crsi'][idx], 0):.4f}\n"
-            f"db     : {nz(result['db'][idx], 0):.4f}\n"
-            f"ub     : {nz(result['ub'][idx], 0):.4f}\n"
-            f"Stoch K: {nz(result['k'][idx], 0):.4f}\n"
-            f"Stoch D: {nz(result['d'][idx], 0):.4f}\n"
-            f"LastCrossUp  : {nz(result['last_crossup'][idx], 0):.4f}\n"
-            f"LastCrossDown: {nz(result['last_crossdown'][idx], 0):.4f}\n"
-            f"---------------------------\n"
-            f"Strategy: ทบไม้สูงสุด {MAX_RECOVERY_BARS} แท่ง\n"
-            f"Next action: BUY รอแท่งเขียว (close&gt;open)\n"
-            f"             SELL รอแท่งแดง (close&lt;open)"
-        )
-        notify(msg)
+        key = f"{SYMBOL}-{bar_time_ms}-{signal_type}"
+        prev_state = load_last_state()
+        if prev_state.get('last_key') == key:
+            print(f'[INFO] ข้ามการแจ้งเตือน — เคย alert แล้ว: {key}')
+        else:
+            if signal_type == 'BUY':
+                poly_direction = 'Up'
+                poly_bet = 'Up'
+            else:
+                poly_direction = 'DOWN'
+                poly_bet = 'Down'
+            msg = (
+                f"{emoji} <b>{signal_type} SIGNAL</b>\n"
+                f"---------------------------\n"
+                f"Symbol : <b>{SYMBOL}</b>\n"
+                f"TF     : {TIMEFRAME_MINUTES}m\n"
+                f"Bar    : {bar_time_str}\n"
+                f"Close  : {bar_close:,.2f}\n"
+                f"---------------------------\n"
+                f"cRSI   : {nz(result['crsi'][idx], 0):.4f}\n"
+                f"db     : {nz(result['db'][idx], 0):.4f}\n"
+                f"ub     : {nz(result['ub'][idx], 0):.4f}\n"
+                f"Stoch K: {nz(result['k'][idx], 0):.4f}\n"
+                f"Stoch D: {nz(result['d'][idx], 0):.4f}\n"
+                f"LastCrossUp  : {nz(result['last_crossup'][idx], 0):.4f}\n"
+                f"LastCrossDown: {nz(result['last_crossdown'][idx], 0):.4f}\n"
+                f"---------------------------\n"
+                f"Polymarket BTC Up/Down 5m:\n"
+                f"Predict next {MAX_RECOVERY_BARS} candles = {poly_direction}\n"
+                f"Bet <b>{poly_bet}</b> on Polymarket"
+            )
+            notify(msg)
+            save_last_state({'last_key': key, 'bar_time_ms': bar_time_ms, 'signal': signal_type})
     else:
         print(f'[INFO] ไม่มีสัญญาณในแท่งปิดล่าสุด (index={idx})')
 
@@ -648,34 +683,8 @@ def run_signal_check():
 # ============================================================
 def main():
     try:
-        # 🚀 --- 1. ดึงค่าคอนฟิกพื้นฐานมาเตรียมโชว์ในข้อความทักทาย ---
-        import os
-        symbol = os.environ.get('SYMBOL', 'BTCUSDT').upper()
-        timeframe = os.environ.get('TIMEFRAME_MINUTES', '5')
-        notify_channel = str(os.environ.get('NOTIFY_CHANNEL', 'telegram')).strip().lower()
-        dry_run = os.environ.get('DRY_RUN', 'false').lower() == 'true'
-
-        # 🟢 --- 2. เรียกใช้ฟังก์ชัน notify() ดั้งเดิมของน้าเพื่อส่งข้อความเปิดระบบ ---
-        if notify_channel in ['telegram', 'line', 'both'] and not dry_run:
-            startup_msg = (
-                f"🟢 <b>[PolyBot V1] เริ่มทำงานตรวจกราฟ</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🔍 <b>คู่เหรียญ:</b> {symbol}\n"
-                f"⏱️ <b>ไทม์เฟรม:</b> {timeframe}m\n"
-                f"🤖 <b>สถานะ:</b> เฝ้าระวังระบบ cRSI + Stoch (Golden Set)\n"
-                f"📡 <i>ระบบเชื่อมต่อสัญญาณสำเร็จแล้ว 100%</i>"
-            )
-            try:
-                # จิ้มเรียกฟังก์ชัน notify ของน้าได้โดยตรงเลย คราวนี้ไม่พังแน่นอน
-                notify(startup_msg)
-                print("[INFO] เรียกใช้งานฟังก์ชัน notify เพื่อส่งข้อความเปิดระบบเรียบร้อย")
-            except Exception as tel_err:
-                print(f"[WARNING] เกิดข้อผิดพลาดขณะเรียกฟังก์ชัน notify: {tel_err}")
-
-        # --- 3. รันระบบคำนวณอินดิเคเตอร์ตามปกติ ---
         result = run_signal_check()
         sys.exit(0)
-
     except Exception as e:
         print(f'[FATAL] {e}')
         import traceback
