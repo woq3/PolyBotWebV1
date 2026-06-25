@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/check-signal",
+      "schedule": "*/15 * * * *"
+    }
+  ],
+  "functions": {
+    "api/*.py": {
+      "maxDuration": 30
+    }
+  }
+}
