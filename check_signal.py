@@ -644,12 +644,49 @@ def run_signal_check():
 
 
 # ============================================================
-#  CLI Entry Point
+#   CLI Entry Point (เวอร์ชันทักทายตอนเริ่มระบบ)
 # ============================================================
 def main():
     try:
+        # 🚀 --- 1. ดึงค่าคอนฟิกพื้นฐานมาโชว์ในข้อความทักทาย ---
+        import os
+        symbol = os.environ.get('SYMBOL', 'BTCUSDT').upper()
+        timeframe = os.environ.get('TIMEFRAME_MINUTES', '5')
+        notify_channel = str(os.environ.get('NOTIFY_CHANNEL', 'telegram')).strip().lower()
+        dry_run = os.environ.get('DRY_RUN', 'false').lower() == 'true'
+
+        # 🟢 --- 2. ลอจิกส่งข้อความทักทายเข้า Telegram ทันทีที่ระบบขยับตัว ---
+        if notify_channel == 'telegram' and not dry_run:
+            startup_msg = (
+                f"🟢 <b>[PolyBot V1] เริ่มทำงานตรวจกราฟ</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🔍 <b>คู่เหรียญ:</b> {symbol}\n"
+                f"⏱️ <b>ไทม์เฟรม:</b> {timeframe}m\n"
+                f"🤖 <b>สถานะ:</b> เฝ้าระวังระบบ cRSI + Stoch (Golden Set)\n"
+                f"📡 <i>ระบบเชื่อมต่อ Telegram สำเร็จแล้ว 100%</i>"
+            )
+            try:
+                # บอทของน้าใช้ฟังก์ชัน send_telegram_message (ตรวจสอบตัวสะกดตัวพิมพ์เล็กใหญ่ให้ตรงกับในโค้ดท่อนบน)
+                send_telegram_message(startup_msg)
+                print("[INFO] ส่งข้อความเปิดระบบเข้า Telegram เรียบร้อยแล้ว")
+            except Exception as tel_err:
+                # ถ้าส่งทักทายไม่ผ่าน ให้พ่นฟ้องใน Log แต่ไม่สั่งให้บอทดับ (ให้ไปลุ้นคำนวณกราฟต่อได้)
+                print(f"[WARNING] ระบบพยายามส่งทักทายเข้า Telegram แต่ล้มเหลว: {tel_err}")
+
+        # --- 3. รันระบบคำนวณอินดิเคเตอร์ตามปกติ ---
         result = run_signal_check()
+        
+        # 🏁 --- 4. เพิ่มส่งข้อความตบท้ายว่าบอทรันจบรอบอย่างปลอดภัย ---
+        if notify_channel == 'telegram' and not dry_run:
+            try:
+                # สามารถเปิดคีย์เวิร์ดนี้ไว้ได้ หรือถ้าคิดว่ามันรกแชทเกินไป (เตือนทุก 15 นาที) สามารถใส่เครื่องหมาย # ปิดบรรทัดนี้ได้ครับ
+                # send_telegram_message(f"🏁 <b>[PolyBot V1]</b> ตรวจสอบและอัปเดตสถานะรอบปัจจุบันเสร็จสิ้น")
+                pass
+            except:
+                pass
+
         sys.exit(0)
+
     except Exception as e:
         print(f'[FATAL] {e}')
         import traceback
