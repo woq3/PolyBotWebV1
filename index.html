@@ -661,22 +661,33 @@ function buildCumulativeWinRate(rows) {
  *  Bybit API Client
  * ============================================================ */
 async function fetchOHLCV(symbol = 'BTCUSDT', interval = '5', limit = 1000) {
-  const url = 'https://api.bybit.com/v5/market/kline';
-  const params = new URLSearchParams({ category: 'linear', symbol, interval, limit: String(limit) });
-  const resp = await fetch(`${url}?${params}`, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
-  if (!resp.ok) throw new Error(`Bybit API HTTP ${resp.status}: ${resp.statusText}`);
-  const data = await resp.json();
-  if (data.retCode !== 0) throw new Error(`Bybit API error: ${data.retMsg || 'Unknown'}`);
-  const klines = data.result?.list || [];
-  if (klines.length === 0) throw new Error('Bybit API returned empty kline list');
-  klines.reverse();
-  return klines.map(kl => ({
-    timestamp: parseInt(kl[0], 10),
-    open: parseFloat(kl[1]), high: parseFloat(kl[2]),
-    low: parseFloat(kl[3]), close: parseFloat(kl[4]),
-    volume: parseFloat(kl[5]),
-  }));
-}
+	// ใช้ OKX API แทน Bybit เพื่อหลบการบล็อก IP
+	const url = 'https://www.okx.com/api/v5/market/candles';
+	const clean = symbol.toUpperCase().replace(/[-_]/g, '');
+	let okxSymbol;
+	if (clean.endsWith('USDT')) {
+		const base = clean.replace('USDT', '');
+		okxSymbol = `${base}-USDT-SWAP`;
+	} else {
+		okxSymbol = clean;
+	}
+	const mins = parseInt(interval, 10);
+	const okxBar = isNaN(mins) ? interval : (mins >= 240 ? '4H' : mins >= 60 ? '1H' : `${mins}m`);
+	const params = new URLSearchParams({ instId: okxSymbol, bar: okxBar, limit: String(limit) });
+	const resp = await fetch(`${url}?${params}`, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+	if (!resp.ok) throw new Error(`OKX API HTTP ${resp.status}: ${resp.statusText}`);
+	const data = await resp.json();
+	if (data.code !== '0') throw new Error(`OKX API error: ${data.msg || 'Unknown'}`);
+	const klines = data.data || [];
+	if (klines.length === 0) throw new Error('OKX API returned empty kline list');
+	klines.reverse(); // OKX ส่งจากใหม่ -> เก่า
+	return klines.map(kl => ({
+		timestamp: parseInt(kl[0], 10),
+		open: parseFloat(kl[1]), high: parseFloat(kl[2]),
+		low: parseFloat(kl[3]), close: parseFloat(kl[4]),
+		volume: parseFloat(kl[5]),
+	}));
+	}
 
 function getLastClosedBarIndex(ohlcv, tfMinutes) {
   if (ohlcv.length === 0) return -1;
