@@ -52,7 +52,8 @@ from datetime import datetime, timezone, timedelta
 EXCHANGE          = os.environ.get('EXCHANGE', 'bybit')
 SYMBOL            = os.environ.get('SYMBOL', 'BTCUSDT')
 TIMEFRAME         = os.environ.get('TIMEFRAME', '5')           # Bybit interval '5' = 5m
-TIMEFRAME_MINUTES = int(os.environ.get('TIMEFRAME_MINUTES', '5'))
+env_tf_minutes = os.environ.get('TIMEFRAME_MINUTES', '').strip()
+TIMEFRAME_MINUTES = int(env_tf_minutes) if env_tf_minutes else 5
 OHLCV_LIMIT       = int(os.environ.get('OHLCV_LIMIT', '250'))   # >= 200 for warmup
 
 # --- Telegram ---
@@ -395,7 +396,7 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
     Returns: list ของ [timestamp_ms, open, high, low, close, volume]
              เรียงจากอดีต -> ปัจจุบัน (oldest first)
     """
-    url = 'https://api.bybit.com/v5/market/kline'
+    url = 'https://api-api.bybit.com/v5/market/kline'
     params = {
         'category': 'linear',
         'symbol':   symbol,
@@ -403,8 +404,8 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
         'limit':    str(limit),
     }
     headers = {
-        'User-Agent': 'Mozilla/5.0 (GitHub-Actions-SignalBot)',
-        'Accept':     'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
     }
     resp = requests.get(url, params=params, headers=headers, timeout=15)
     resp.raise_for_status()
