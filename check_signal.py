@@ -390,41 +390,48 @@ def compute_signals(closes):
 # ============================================================
 
 def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
-    # เปลี่ยนมาใช้ .nl หรือ -global เพื่อหลบการบล็อก IP ของ GitHub Actions
-    url = 'https://api.bybit.nl/v5/market/kline'
+    # ย้ายค่ายมาใช้ Binance Public API เพื่อหลบการบล็อก IP ของ GitHub Actions (ดึงได้ฟรี ไม่ต้องใช้ API Key)
+    url = 'https://api.binance.com/api/v3/klines'
     
+    # แปลง interval (เช่น '5') ให้เข้ากับฟอร์แมตของ Binance (เช่น '5m')
+    tf_str = str(interval).strip()
+    if tf_str.isdigit():
+        binance_interval = f"{tf_str}m"
+        if tf_str == "60":
+            binance_interval = "1h"
+        elif tf_str == "240":
+            binance_interval = "4h"
+    else:
+        # ป้องกันกรณีตัวแปรหลุดมาเป็นอักษรอยู่แล้ว เช่น '5m', '1h'
+        binance_interval = tf_str.lower()
+
     params = {
-        'category': 'linear',
-        'symbol':   symbol,
-        'interval': str(interval),
+        'symbol':   symbol.upper(),
+        'interval': binance_interval,
         'limit':    str(limit),
     }
+    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept':     'application/json',
     }
+    
     resp = requests.get(url, params=params, headers=headers, timeout=15)
     resp.raise_for_status()
-    data = resp.json()
+    klines = resp.json()
 
-    if data.get('retCode') != 0:
-        raise Exception(f"Bybit API error: {data.get('retMsg', 'Unknown')}")
-
-    klines = data['result']['list']
     if not klines:
-        raise Exception('Bybit API returned empty kline list')
+        raise Exception('Binance API returned empty kline list')
 
-    klines.reverse()
-
+    # หมายเหตุ: ข้อมูลจาก Binance จะเรียงจากเก่าไปใหม่อยู่แล้ว (ไม่ต้อง .reverse() เหมือน Bybit)
     ohlcv = []
     for kl in klines:
         ohlcv.append([
-            int(kl[0]),     # timestamp (ms)
-            float(kl[1]),   # open
-            float(kl[2]),   # high
-            float(kl[3]),   # low
-            float(kl[4]),   # close
-            float(kl[5]),   # volume
+            int(kl[0]),     # Open time (ms)
+            float(kl[1]),   # Open
+            float(kl[2]),   # High
+            float(kl[3]),   # Low
+            float(kl[4]),   # Close
+            float(kl[5]),   # Volume
         ])
     return ohlcv
 
