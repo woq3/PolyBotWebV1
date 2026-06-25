@@ -390,24 +390,32 @@ def compute_signals(closes):
 # ============================================================
 
 def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
-    # ย้ายค่ายมาใช้ Binance Public API เพื่อหลบการบล็อก IP ของ GitHub Actions (ดึงได้ฟรี ไม่ต้องใช้ API Key)
-    url = 'https://api.binance.com/api/v3/klines'
+    # ย้ายมาใช้ OKX API เพื่อหลบการบล็อก IP และกฎหมายพื้นที่ (451) ของ GitHub Actions
+    url = 'https://www.okx.com/api/v5/market/candles'
     
-    # แปลง interval (เช่น '5') ให้เข้ากับฟอร์แมตของ Binance (เช่น '5m')
+    # แปลงกู่ตัวแปรคู่เหรียญให้เข้ากับรูปแบบของ OKX (เช่น BTCUSDT -> BTC-USDT-SWAP สำหรับสัญญาฟิวเจอร์ส หรือ BTC-USDT สำหรับสปอต)
+    # แนะนำให้ใช้แบบ SWAP (ฟิวเจอร์ส) เพราะราคาจะตรงกับ Bybit ที่เราสแกนวินเรทไว้มากที่สุด
+    clean_symbol = str(symbol).upper().replace('-', '').replace('_', '')
+    if "USDT" in clean_symbol and not "-SWAP" in clean_symbol:
+        base_currency = clean_symbol.replace("USDT", "")
+        okx_symbol = f"{base_currency}-USDT-SWAP"
+    else:
+        okx_symbol = clean_symbol
+
+    # แปลง interval (เช่น '5') ให้เข้ากับฟอร์แมตของ OKX (เช่น '5m', '1H', '4H')
     tf_str = str(interval).strip()
     if tf_str.isdigit():
-        binance_interval = f"{tf_str}m"
+        okx_interval = f"{tf_str}m"
         if tf_str == "60":
-            binance_interval = "1h"
+            okx_interval = "1H"
         elif tf_str == "240":
-            binance_interval = "4h"
+            okx_interval = "4H"
     else:
-        # ป้องกันกรณีตัวแปรหลุดมาเป็นอักษรอยู่แล้ว เช่น '5m', '1h'
-        binance_interval = tf_str.lower()
+        okx_interval = tf_str
 
     params = {
-        'symbol':   symbol.upper(),
-        'interval': binance_interval,
+        'instId':   okx_symbol,
+        'bar':      okx_interval,
         'limit':    str(limit),
     }
     
@@ -417,21 +425,29 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
     
     resp = requests.get(url, params=params, headers=headers, timeout=15)
     resp.raise_for_status()
-    klines = resp.json()
+    result_data = resp.json()
 
+    if result_data.get('code') != '0':
+        raise Exception(f"OKX API error: {result_data.get('msg', 'Unknown')}")
+
+    klines = result_data.get('data', [])
     if not klines:
-        raise Exception('Binance API returned empty kline list')
+        raise Exception('OKX API returned empty kline list')
 
-    # หมายเหตุ: ข้อมูลจาก Binance จะเรียงจากเก่าไปใหม่อยู่แล้ว (ไม่ต้อง .reverse() เหมือน Bybit)
+    # OKX ส่งข้อมูลจาก "ใหม่ไปเก่า" (แท่งปัจจุบันอยู่ดัชนี 0) 
+    # โค้ดคำนวณต้องการเก่าไปใหม่ จึงต้องใช้ .reverse() เหมือน Bybit ดั้งเดิมครับ
+    klines.reverse()
+
     ohlcv = []
     for kl in klines:
+        # โครงสร้าง OKX: 0=ts, 1=o, 2=h, 3=l, 4=c, 5=vol
         ohlcv.append([
-            int(kl[0]),     # Open time (ms)
-            float(kl[1]),   # Open
-            float(kl[2]),   # High
-            float(kl[3]),   # Low
-            float(kl[4]),   # Close
-            float(kl[5]),   # Volume
+            int(kl[0]),     # timestamp (ms)
+            float(kl[1]),   # open
+            float(kl[2]),   # high
+            float(kl[3]),   # low
+            float(kl[4]),   # close
+            float(kl[5]),   # volume
         ])
     return ohlcv
 
