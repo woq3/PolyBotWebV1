@@ -1,10 +1,10 @@
 # ============================================================
-#  GitHub Actions Workflow  -  cRSI + Stoch RSI Signal Bot
+#  GitHub Actions Workflow  -  Cron Signal Check (Telegram)
 # ============================================================
 #  Trigger:
-#    - Schedule: ทุก 15 นาที (ที่นาที 05, 20, 35, 50 UTC)
-#      เลื่อนจาก :00/:15/:30/:45 ออกไป 5 นาทีเพื่อรอให้แท่งเทียน
-#      ปิดตัวและ exchange update ข้อมูลเสร็จก่อน
+#    - Schedule: ทุก 5 นาที (หลังแท่ง 5m ปิด ~30 วินาที)
+#      Bybit แท่ง 5m ปิดที่ :00, :05, :10, ... UTC
+#      รอ 30 วินาทีให้ exchange update ข้อมูลก่อน
 #    - Manual: คลิก "Run workflow" ในแท็บ Actions ของ repo
 # ============================================================
 
@@ -12,11 +12,10 @@ name: Check Trading Signal
 
 on:
   schedule:
-    # 5 นาทีหลังจากแท่ง 15m แต่ละแท่งปิด (UTC)
-    # Bybit แท่ง 15m ปิดที่ :00, :15, :30, :45 UTC
-    - cron: '5,20,35,50 * * * *'
+    # รันทุก 5 นาที หลังเวลา :00, :05, :10, :15, ... UTC +30 วินาที buffer
+    # ใช้รูปแบบ "*/5 * * * *" แต่ GitHub Actions อาจ delay 1-3 นาที
+    - cron: '*/5 * * * *'
   workflow_dispatch:
-    # อนุญาตให้ trigger manual ได้จาก GitHub UI
     inputs:
       dry_run:
         description: 'Dry-run mode (ไม่ส่งแจ้งเตือนจริง)'
@@ -24,7 +23,7 @@ on:
         type: boolean
         default: false
 
-# ป้องกันการรันซ้อนทับกัน (ถ้า cron ก่อนหน้ายังไม่เสร็จ)
+# ป้องกันการรันซ้อนทับกัน
 concurrency:
   group: check-signal-${{ github.ref }}
   cancel-in-progress: false
@@ -44,7 +43,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'                          # cache pip dependencies
+          cache: 'pip'
           cache-dependency-path: requirements.txt
 
       # --- 3. Install dependencies ---
@@ -56,14 +55,15 @@ jobs:
       # --- 4. Run signal check ---
       - name: 🎯 Run signal check
         env:
-          # --- Exchange ---
+          # --- Exchange (Variables) ---
           EXCHANGE:          ${{ vars.EXCHANGE }}
           SYMBOL:            ${{ vars.SYMBOL }}
           TIMEFRAME:         ${{ vars.TIMEFRAME }}
           TIMEFRAME_MINUTES: ${{ vars.TIMEFRAME_MINUTES }}
           OHLCV_LIMIT:       ${{ vars.OHLCV_LIMIT }}
+          MAX_RECOVERY_BARS: ${{ vars.MAX_RECOVERY_BARS }}
 
-          # --- Notification ---
+          # --- Notification (Variables) ---
           NOTIFY_CHANNEL:    ${{ vars.NOTIFY_CHANNEL }}
           TZ_OFFSET_HOURS:   ${{ vars.TZ_OFFSET_HOURS }}
 
@@ -78,7 +78,7 @@ jobs:
           echo "=== Run signal check ==="
           python check_signal.py
 
-      # --- 5. (Optional) ส่ง failure alert ผ่าน GitHub Actions ---
+      # --- 5. Notify on failure ---
       - name: 🚨 Notify on failure
         if: failure()
         run: |

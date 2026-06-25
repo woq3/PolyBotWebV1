@@ -6,6 +6,22 @@
  Exchange  : Bybit v5 Public API (no auth needed)
 ================================================================================
 
+ Parameters (จาก TradingView settings screenshot — ค่าล่าสุด):
+   Dominant Cycle Length : 13   (domcycle)
+   Vibration             : 10
+   Leveling              : 10.0
+   SmoothK               : 3
+   SmoothD               : 3
+   RSI Length            : 15   (lengthRSI)
+   Stochastic Length     : 10   (lengthStoch)
+   Stoch Buy Zone (low)  : 15   (stoch_low)
+   Stoch Sell Zone (high): 85   (stoch_high)
+
+ Win/Loss Logic: ทบไม้ (Martingale Recovery)
+   BUY  ชนะถ้า มีแท่งเขียว (close > open) อย่างน้อย 1 แท่งใน N แท่งถัดไป
+   SELL ชนะถ้า มีแท่งแดง (close < open) อย่างน้อย 1 แท่งใน N แท่งถัดไป
+   ชนะเร็ว → barsHeld น้อย / ชนะช้า → barsHeld มาก / แพ้ → barsHeld = N
+
  การแปลฟังก์ชัน Pine Script -> Python (สำคัญมาก):
    1. ta.rma(src, length)  ->  alpha = 1/length  (Wilder's Smoothing)
       ** ห้ามใช้ alpha = 2/(length+1) ซึ่งเป็นของ ta.ema **
@@ -35,9 +51,9 @@ from datetime import datetime, timezone, timedelta
 # --- Exchange ---
 EXCHANGE          = os.environ.get('EXCHANGE', 'bybit')
 SYMBOL            = os.environ.get('SYMBOL', 'BTCUSDT')
-TIMEFRAME         = os.environ.get('TIMEFRAME', '15')
-TIMEFRAME_MINUTES = int(os.environ.get('TIMEFRAME_MINUTES', '15'))
-OHLCV_LIMIT       = int(os.environ.get('OHLCV_LIMIT', '250'))
+TIMEFRAME         = os.environ.get('TIMEFRAME', '5')           # Bybit interval '5' = 5m
+TIMEFRAME_MINUTES = int(os.environ.get('TIMEFRAME_MINUTES', '5'))
+OHLCV_LIMIT       = int(os.environ.get('OHLCV_LIMIT', '250'))   # >= 200 for warmup
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -52,26 +68,29 @@ NOTIFY_CHANNEL     = os.environ.get('NOTIFY_CHANNEL', 'telegram')
 # --- Dry run (ทดสอบโดยไม่ส่งแจ้งเตือนจริง) ---
 DRY_RUN            = os.environ.get('DRY_RUN', 'false').lower() == 'true'
 
-# --- Timezone offset (ชม.) สำหรับแสดงเวลาในข้อความ (default 7 = Bangkok) ---
+# --- Timezone offset (ชม.) สำหรับแสดงเวลา (default 7 = Bangkok) ---
 DISPLAY_TZ_OFFSET_HOURS = int(os.environ.get('TZ_OFFSET_HOURS', '7'))
 
+# --- Win/Loss: จำนวนแท่งสูงสุดที่ยอมให้ "ทบไม้" ---
+MAX_RECOVERY_BARS  = int(os.environ.get('MAX_RECOVERY_BARS', '3'))
+
 
 # ============================================================
-#  Pine Script Parameters (จากต้นฉบับ ห้ามแก้)
+#  Pine Script Parameters (จากรูป — ห้ามแก้)
 # ============================================================
-DOMCYCLE     = 14
+DOMCYCLE     = 13
 VIBRATION    = 10
-LEVELING     = 7.0
-CYCLICMEMORY = DOMCYCLE * 2      # = 28
-CYCLELEN     = DOMCYCLE // 2     # = 7  (Pine int() truncates toward zero)
+LEVELING     = 10.0
+CYCLICMEMORY = DOMCYCLE * 2      # = 26
+CYCLELEN     = DOMCYCLE // 2     # = 6  (Pine int() truncates toward zero)
 
 SMOOTHK     = 3
 SMOOTHD     = 3
 LENGTH_RSI  = 15
-LENGTH_STOCH = 12
+LENGTH_STOCH = 10
 
-STOCH_LOW   = 10
-STOCH_HIGH  = 90
+STOCH_LOW   = 15
+STOCH_HIGH  = 85
 
 
 # ============================================================
@@ -79,7 +98,6 @@ STOCH_HIGH  = 90
 # ============================================================
 
 def is_nan(v):
-    """ตรวจว่าค่าเป็น NaN หรือ None"""
     if v is None:
         return True
     if isinstance(v, float):
@@ -88,11 +106,6 @@ def is_nan(v):
 
 
 def nz(value, default=0.0):
-    """
-    Pine Script nz(x, default):
-      - ถ้า x ไม่ใช่ NaN/None  คืน x
-      - ถ้า x เป็น NaN/None     คืน default
-    """
     if is_nan(value):
         return default
     return value
@@ -100,7 +113,7 @@ def nz(value, default=0.0):
 
 def calc_rma(values, length):
     """
-    Wilder's RMA (Modified Moving Average)  - ตรงกับ Pine ta.rma()
+    Wilder's RMA  - ตรงกับ Pine ta.rma()
        alpha = 1 / length        (** ไม่ใช่ 2/(length+1) แบบ EMA **)
        seed  = SMA ของ `length` ค่าแรกที่ไม่ใช่ NaN ติดต่อกัน
        rma[i] = alpha * values[i] + (1 - alpha) * rma[i-1]
@@ -123,11 +136,9 @@ def calc_rma(values, length):
     if start_idx == -1:
         return rma
 
-    # SMA seed
     window = values[start_idx - length + 1 : start_idx + 1]
     rma[start_idx] = sum(window) / length
 
-    # Recursive formula (bar-by-bar, ห้าม vectorize)
     alpha = 1.0 / length
     for i in range(start_idx + 1, n):
         v = values[i]
@@ -139,7 +150,6 @@ def calc_rma(values, length):
 
 
 def calc_sma(values, length):
-    """Simple Moving Average  - ตรงกับ Pine ta.sma()"""
     n = len(values)
     sma = [float('nan')] * n
     for i in range(length - 1, n):
@@ -151,15 +161,8 @@ def calc_sma(values, length):
 
 
 def calc_rsi(src, length):
-    """
-    Standard RSI ใช้ Wilder's smoothing  - ตรงกับ Pine ta.rsi()
-       change = src - src[1]
-       up   = rma(max(change, 0),   length)
-       down = rma(max(-change, 0),  length)
-       rsi  = down==0 ? 100 : up==0 ? 0 : 100 - 100/(1 + up/down)
-    """
+    """Standard RSI ใช้ Wilder's smoothing  - ตรงกับ Pine ta.rsi()"""
     n = len(src)
-
     change = [float('nan')] * n
     for i in range(1, n):
         change[i] = src[i] - src[i - 1]
@@ -186,16 +189,12 @@ def calc_rsi(src, length):
 
 
 def calc_stoch(source, length):
-    """
-    Stochastic  - ตรงกับ Pine ta.stoch(source, source, source, length)
-       = 100 * (source - lowest(source, length))
-              / (highest(source, length) - lowest(source, length))
-    """
+    """Stochastic  - ตรงกับ Pine ta.stoch(source, source, source, length)"""
     n = len(source)
     stoch = [float('nan')] * n
     for i in range(length - 1, n):
         window = source[i - length + 1 : i + 1]
-        valid  = [v for v in window if not is_nan(v)]
+        valid = [v for v in window if not is_nan(v)]
         if len(valid) < length:
             continue
         lowest  = min(valid)
@@ -212,21 +211,14 @@ def calc_stoch(source, length):
 # ============================================================
 
 def compute_signals(closes):
-    """
-    คำนวณ cRSI / db / ub / Stoch RSI / สัญญาณซื้อ-ขาย ทุก bar
-
-    closes : list ราคาปิดเรียงเวลาจากอดีต -> ปัจจุบัน
-    return : dict ของ list ทุก indicator + สัญญาณ
-    """
     src = closes
     n = len(src)
 
-    # -------- cRSI Parameters --------
     torque     = 2.0 / (VIBRATION + 1)               # = 0.1818...
     phasingLag = int((VIBRATION - 1) / 2)            # = 4   (Pine int())
-    aperc      = LEVELING / 100.0                    # = 0.07
+    aperc      = LEVELING / 100.0                    # = 0.10
 
-    # -------- [1] RSI สำหรับ cRSI (cyclelen=7) --------
+    # -------- [1] RSI สำหรับ cRSI (cyclelen=6) --------
     change = [float('nan')] * n
     for i in range(1, n):
         change[i] = src[i] - src[i - 1]
@@ -251,8 +243,6 @@ def compute_signals(closes):
             rsi[i] = 100.0 - 100.0 / (1.0 + u / d)
 
     # -------- [2] cRSI (var float, bar-by-bar) --------
-    # var float crsi = 0.0
-    # crsi := torque * (2 * rsi - rsi[phasingLag]) + (1 - torque) * nz(crsi[1])
     crsi = [float('nan')] * n
     for i in range(n):
         rsi_now = rsi[i]
@@ -270,7 +260,6 @@ def compute_signals(closes):
     ub = [0.0] * n
 
     for i in range(n):
-        # หา lmax / lmin ในหน้าต่าง cyclicmemory
         lmax = -999999.0
         lmin =  999999.0
         for j in range(CYCLICMEMORY):
@@ -293,7 +282,7 @@ def compute_signals(closes):
 
         mstep = (lmax - lmin) / 100.0
 
-        # db: scan จาก lmin ขึ้นไป หา testvalue แรกที่ below/cyclicmemory >= aperc
+        # db
         db_found = False
         for step in range(101):
             testvalue = lmin + mstep * step
@@ -312,7 +301,7 @@ def compute_signals(closes):
         if not db_found:
             db[i] = db[i - 1] if i > 0 else 0.0
 
-        # ub: scan จาก lmax ลงลง หา testvalue แรกที่ above/cyclicmemory >= aperc
+        # ub
         ub_found = False
         for step in range(101):
             testvalue = lmax - mstep * step
@@ -332,9 +321,6 @@ def compute_signals(closes):
             ub[i] = ub[i - 1] if i > 0 else 0.0
 
     # -------- [4] Stoch RSI --------
-    # rsi1 = ta.rsi(src, lengthRSI=15)
-    # k    = ta.sma(ta.stoch(rsi1, rsi1, rsi1, lengthStoch=12), smoothK=3)
-    # d    = ta.sma(k, smoothD=3)
     rsi1      = calc_rsi(src, LENGTH_RSI)
     stoch_raw = calc_stoch(rsi1, LENGTH_STOCH)
     k         = calc_sma(stoch_raw, SMOOTHK)
@@ -356,16 +342,12 @@ def compute_signals(closes):
         if any(is_nan(x) for x in (k_now, k_prev, d_now, d_prev)):
             continue
 
-        # ta.crossover(k, d)
         if k_now > d_now and k_prev <= d_prev:
             last_crossup[i] = k_now
-        # ta.crossunder(k, d)
         if k_now < d_now and k_prev >= d_prev:
             last_crossdown[i] = k_now
 
     # -------- [6] Buy / Sell Signals --------
-    # buy_signal  = crossover(crsi, db)  AND last_stoch_k_crossup   < stoch_low  AND k < stoch_low
-    # sell_signal = crossunder(crsi, ub) AND last_stoch_k_crossdown > stoch_high AND k > stoch_high
     buy_signals  = [False] * n
     sell_signals = [False] * n
 
@@ -435,7 +417,6 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
     if not klines:
         raise Exception('Bybit API returned empty kline list')
 
-    # Bybit ส่งกลับ newest-first -> reverse เป็น oldest-first
     klines.reverse()
 
     ohlcv = []
@@ -452,15 +433,11 @@ def fetch_ohlcv_bybit(symbol=SYMBOL, interval=TIMEFRAME, limit=OHLCV_LIMIT):
 
 
 def get_last_closed_bar_index(ohlcv, timeframe_minutes=TIMEFRAME_MINUTES):
-    """
-    หา index ของแท่งเทียนที่ปิดตัวลงล่าสุด
-    (แท่งสุดท้ายใน OHLCV อาจเป็นแท่งที่กำลัง form อยู่ -> ใช้แท่งก่อนหน้า)
-    """
+    """หา index ของแท่งเทียนที่ปิดตัวลงล่าสุด"""
     now_ms          = int(time.time() * 1000)
     last_bar_open   = ohlcv[-1][0]
     last_bar_close  = last_bar_open + timeframe_minutes * 60 * 1000
 
-    # buffer 5 วินาที เผื่อ exchange ยังไม่ update ข้อมูล
     if now_ms >= last_bar_close + 5000:
         return len(ohlcv) - 1
     return len(ohlcv) - 2
@@ -471,7 +448,6 @@ def get_last_closed_bar_index(ohlcv, timeframe_minutes=TIMEFRAME_MINUTES):
 # ============================================================
 
 def send_telegram(message):
-    """ส่งข้อความเข้า Telegram ผ่าน Bot API"""
     if DRY_RUN:
         print('[DRY-RUN] Telegram message:')
         print(message)
@@ -500,7 +476,6 @@ def send_telegram(message):
 
 
 def send_line_notify(message):
-    """ส่งข้อความเข้า LINE Notify"""
     if DRY_RUN:
         print('[DRY-RUN] LINE message:')
         print(message)
@@ -525,7 +500,6 @@ def send_line_notify(message):
 
 
 def notify(message):
-    """ส่งแจ้งเตือนตาม channel ที่กำหนดใน NOTIFY_CHANNEL"""
     ch = NOTIFY_CHANNEL.lower()
     if ch == 'telegram':
         send_telegram(message)
@@ -550,7 +524,7 @@ def run_signal_check():
       3. ตรวจแท่งปิดล่าสุด -> ส่งแจ้งเตือนถ้ามีสัญญาณ
     """
     print(f'[INFO] เริ่มตรวจสัญญาณ: {SYMBOL} {TIMEFRAME_MINUTES}m  (limit={OHLCV_LIMIT})')
-    print(f'[INFO] DRY_RUN={DRY_RUN}  NOTIFY_CHANNEL={NOTIFY_CHANNEL}')
+    print(f'[INFO] DRY_RUN={DRY_RUN}  NOTIFY_CHANNEL={NOTIFY_CHANNEL}  MAX_RECOVERY_BARS={MAX_RECOVERY_BARS}')
 
     # 1) Fetch
     ohlcv = fetch_ohlcv_bybit()
@@ -571,7 +545,7 @@ def run_signal_check():
     buy  = result['buy_signals'][idx]
     sell = result['sell_signals'][idx]
 
-    # เตรียมข้อมูลเวลา (แสดงเป็นเวลาท้องถิ่น)
+    # เตรียมข้อมูลเวลา
     bar_time_ms  = timestamps[idx]
     bar_close    = closes[idx]
     tz_local     = timezone(timedelta(hours=DISPLAY_TZ_OFFSET_HOURS))
@@ -588,7 +562,6 @@ def run_signal_check():
         signal_type, emoji = 'SELL', '[SELL]'
 
     if signal_type:
-        # Telegram HTML format (LINE Notify จะ strip HTML tags อัตโนมัติ)
         msg = (
             f"{emoji} <b>{signal_type} SIGNAL</b>\n"
             f"---------------------------\n"
@@ -603,15 +576,21 @@ def run_signal_check():
             f"Stoch K: {nz(result['k'][idx], 0):.4f}\n"
             f"Stoch D: {nz(result['d'][idx], 0):.4f}\n"
             f"LastCrossUp  : {nz(result['last_crossup'][idx], 0):.4f}\n"
-            f"LastCrossDown: {nz(result['last_crossdown'][idx], 0):.4f}"
+            f"LastCrossDown: {nz(result['last_crossdown'][idx], 0):.4f}\n"
+            f"---------------------------\n"
+            f"Strategy: ทบไม้สูงสุด {MAX_RECOVERY_BARS} แท่ง\n"
+            f"Next action: BUY รอแท่งเขียว (close&gt;open)\n"
+            f"             SELL รอแท่งแดง (close&lt;open)"
         )
         notify(msg)
+    else:
+        print(f'[INFO] ไม่มีสัญญาณในแท่งปิดล่าสุด (index={idx})')
 
-    # 5) สรุปผลลัพธ์ สำหรับ GitHub Actions log
+    # 5) สรุปผลลัพธ์
     print()
-    print('=' * 50)
+    print('=' * 60)
     print(f'  Signal Result: {signal_type or "NONE"}')
-    print('=' * 50)
+    print('=' * 60)
     print(json.dumps({
         'symbol':          SYMBOL,
         'timeframe':       f'{TIMEFRAME_MINUTES}m',
@@ -635,7 +614,7 @@ def run_signal_check():
             'last_crossdown':  round(nz(result['last_crossdown'][idx], 0), 6),
         },
     }, indent=2))
-    print('=' * 50)
+    print('=' * 60)
 
     return {
         'signal':      signal_type or 'NONE',
@@ -648,10 +627,8 @@ def run_signal_check():
 #  CLI Entry Point
 # ============================================================
 def main():
-    """CLI entry สำหรับรันใน GitHub Actions (หรือ local)"""
     try:
         result = run_signal_check()
-        # exit 0 เสมอเมื่อรันสำเร็จ (แม้ไม่มีสัญญาณ) เพื่อไม่ให้ GitHub Actions fail
         sys.exit(0)
     except Exception as e:
         print(f'[FATAL] {e}')

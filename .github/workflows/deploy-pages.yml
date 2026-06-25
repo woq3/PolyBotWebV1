@@ -1,0 +1,55 @@
+# ============================================================
+#  GitHub Actions Workflow  -  Deploy Dashboard to GitHub Pages
+# ============================================================
+#  Deploy index.html (เว็บ dashboard แบบ static) ไปยัง GitHub Pages
+#  ฟรี 100% สำหรับ public repo
+#
+#  Trigger:
+#    - Push ไปที่ main branch (เมื่อแก้ index.html)
+#    - Manual: คลิก "Run workflow" ในแท็บ Actions
+# ============================================================
+
+name: Deploy Dashboard to Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+# ต้องการ permission สำหรับ GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# ป้องกันการ deploy ซ้อนทับ — เอาอันใหม่สุด
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📄 Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: 📦 Upload artifact (index.html)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # อัปโหลดไฟล์ทั้งหมดใน root directory (มี index.html)
+          path: '.'
+
+      - name: 🚀 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

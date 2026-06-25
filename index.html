@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cRSI + Stoch RSI Signal Bot — 5m Trading Terminal</title>
+<meta name="description" content="Live trading signals & backtest dashboard for BTC/ETH/SOL on Bybit — Pine Script v5 indicator translated to JavaScript, with win/loss table like TradingView.">
+
+<!-- ============================================================
+     CDN Libraries
+     - Tailwind CSS 4 (browser build)  — styling
+     - Chart.js 4                      — win rate / P&L chart
+     ============================================================ -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+  :root {
+    --bg:        #0a0e1a;
+    --bg-card:   rgba(255,255,255,0.03);
+    --fg:        #e4e7ec;
+    --muted:     #6b7280;
+    --border:    rgba(255,255,255,0.08);
+    --green:     #00d4aa;
+    --red:       #ff3b69;
+    --yellow:    #fbbf24;
+    --blue:      #3b82f6;
+  }
+  html, body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif; }
+  body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0, 212, 170, 0.08), transparent),
+      radial-gradient(ellipse 60% 50% at 80% 100%, rgba(255, 59, 105, 0.04), transparent);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  .font-mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); backdrop-filter: blur(8px); }
+  .green { color: var(--green); }
+  .red   { color: var(--red); }
+  .yellow{ color: var(--yellow); }
+  .muted { color: var(--muted); }
+  .bg-green-soft { background: rgba(0, 212, 170, 0.15); color: var(--green); }
+  .bg-red-soft   { background: rgba(255, 59, 105, 0.15); color: var(--red); }
+  .bg-yellow-soft{ background: rgba(251, 191, 36, 0.15); color: var(--yellow); }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+  /* Sticky table header */
+  thead { position: sticky; top: 0; background: rgba(10, 14, 26, 0.95); backdrop-filter: blur(8px); z-index: 10; }
+
+  /* Modal */
+  .modal-backdrop { background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+
+  /* Loading spinner */
+  .spinner { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .pulse { animation: pulse 2s ease-in-out infinite; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ==================== HEADER ==================== -->
+<header class="sticky top-0 z-30 border-b border-white/5 backdrop-blur" style="background: rgba(10,14,26,0.85);">
+  <div class="mx-auto max-w-[1600px] flex h-14 items-center justify-between gap-4 px-4 sm:px-6">
+    <div class="flex items-center gap-3">
+      <div class="flex h-9 w-9 items-center justify-center rounded-lg shadow-lg" style="background: linear-gradient(135deg, #00d4aa, #06b6d4); box-shadow: 0 0 20px rgba(0,212,170,0.2);">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </div>
+      <div>
+        <h1 class="text-sm font-bold leading-tight">cRSI + Stoch RSI Signal Bot</h1>
+        <p class="text-[10px] muted" id="header-subtitle">BTCUSDT · 5m · ทบไม้ W/L</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <div class="hidden sm:flex items-center gap-2">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="auto-refresh-toggle" class="sr-only" checked>
+          <div id="auto-refresh-track" class="relative w-9 h-5 bg-white/10 rounded-full transition-colors">
+            <div id="auto-refresh-thumb" class="absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform" style="background: var(--green);"></div>
+          </div>
+          <span class="text-xs muted">Auto</span>
+        </label>
+        <span id="countdown-badge" class="font-mono text-xs px-2 py-0.5 rounded border border-white/10 tabular-nums">05:00</span>
+      </div>
+
+      <button id="refresh-btn" class="flex items-center gap-1.5 text-xs px-3 h-8 rounded border border-white/10 hover:bg-white/5 transition-colors">
+        <svg id="refresh-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+        Refresh
+      </button>
+
+      <button id="settings-btn" class="flex items-center gap-1.5 text-xs px-3 h-8 rounded border border-white/10 hover:bg-white/5 transition-colors">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        Settings
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ==================== ERROR BANNER ==================== -->
+<div id="error-banner" class="hidden mx-auto max-w-[1600px] mt-4 px-4 sm:px-6">
+  <div class="card border-red-500/30 bg-red-500/10 rounded-lg p-3 text-sm">
+    <div class="flex items-center gap-2 red font-semibold mb-1">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      Error fetching data
+    </div>
+    <div id="error-msg" class="font-mono text-xs"></div>
+  </div>
+</div>
+
+<!-- ==================== MAIN ==================== -->
+<main class="mx-auto max-w-[1600px] p-4 sm:p-6 space-y-4">
+
+  <!-- ============ LIVE SIGNAL CARD ============ -->
+  <section class="card rounded-xl p-5">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-medium muted">
+        Live Signal  ·  <span id="ls-symbol">BTCUSDT</span>  ·  <span id="ls-tf">5m</span>
+      </h2>
+      <span id="ls-loading" class="hidden text-xs yellow border border-yellow-500/40 rounded px-2 py-0.5">
+        <span class="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1 pulse"></span>
+        UPDATING
+      </span>
+    </div>
+    <div id="ls-content">
+      <div class="flex flex-col items-center justify-center h-32 muted gap-2">
+        <div class="text-4xl">⚪</div>
+        <div class="text-sm">Loading...</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STATS BAR ============ -->
+  <section id="stats-bar" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-3">
+    <!-- Stats injected by JS -->
+  </section>
+
+  <!-- ============ PERFORMANCE CHART ============ -->
+  <section class="card rounded-xl">
+    <div class="flex items-center justify-between p-4 pb-2">
+      <h2 class="text-sm font-medium muted">Performance Curve</h2>
+      <div class="flex border border-white/10 rounded text-xs overflow-hidden">
+        <button id="tab-winrate" class="px-3 py-1 bg-white/10">Win Rate %</button>
+        <button id="tab-pnl" class="px-3 py-1 hover:bg-white/5">Per-Signal P&L %</button>
+      </div>
+    </div>
+    <div class="p-4 pt-0" style="height: 280px;">
+      <canvas id="perf-chart"></canvas>
+    </div>
+  </section>
+
+  <!-- ============ SIGNAL TABLE ============ -->
+  <section class="card rounded-xl">
+    <div class="flex flex-wrap items-center justify-between gap-3 p-4 pb-3">
+      <h2 class="text-sm font-medium muted">
+        Signal Backtest Table
+        <span id="table-count" class="ml-2 text-xs"></span>
+      </h2>
+      <div class="flex flex-wrap items-center gap-2">
+        <input id="search-input" type="text" placeholder="Search..." class="h-8 w-32 px-2 text-xs rounded border border-white/10 bg-white/5 focus:outline-none focus:border-emerald-500/50" />
+        <select id="filter-select" class="h-8 w-32 px-2 text-xs rounded border border-white/10 bg-white/5 focus:outline-none focus:border-emerald-500/50">
+          <option value="ALL">All</option>
+          <option value="BUY">Buy</option>
+          <option value="SELL">Sell</option>
+          <option value="WIN">Win</option>
+          <option value="LOSS">Loss</option>
+          <option value="PENDING">Pending</option>
+        </select>
+        <button id="export-csv-btn" class="h-8 px-3 text-xs rounded border border-white/10 hover:bg-white/5 transition-colors">Export CSV</button>
+      </div>
+    </div>
+    <div class="overflow-auto max-h-[600px] border-t border-white/5">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-muted border-b border-white/10 text-[11px] uppercase tracking-wider">
+            <th class="px-3 py-2 text-left">Time (ICT)</th>
+            <th class="px-3 py-2 text-left">Symbol</th>
+            <th class="px-3 py-2 text-center">Type</th>
+            <th class="px-3 py-2 text-right">Entry</th>
+            <th class="px-3 py-2 text-right">Exit</th>
+            <th class="px-3 py-2 text-center">Bars</th>
+            <th class="px-3 py-2 text-right">P&L %</th>
+            <th class="px-3 py-2 text-center">Result</th>
+            <th class="px-3 py-2 text-right">cRSI</th>
+            <th class="px-3 py-2 text-right">K</th>
+            <th class="px-3 py-2 text-right">D</th>
+          </tr>
+        </thead>
+        <tbody id="signal-tbody">
+          <tr><td colspan="11" class="py-12 text-center muted">Loading signals...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="pt-4 pb-6 text-center text-xs muted space-y-1">
+    <div>Data source: Bybit v5 Public API · Indicator: cRSI + Stoch RSI · Pine Script v5 translation</div>
+    <div class="font-mono">Last updated: <span id="last-updated">Never</span></div>
+    <div class="text-[10px] opacity-60">⚠️ การลงทุนมีความเสี่ยง — ใช้เพื่อการศึกษาเท่านั้น · Not financial advice</div>
+  </footer>
+</main>
+
+<!-- ==================== SETTINGS MODAL ==================== -->
+<div id="settings-modal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-4">
+  <div class="card rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-semibold">Settings</h3>
+      <button id="close-modal" class="muted hover:text-white">✕</button>
+    </div>
+    <p class="text-xs muted mb-5">Configure symbol, backtest parameters, and Telegram alerts.</p>
+
+    <!-- Symbol -->
+    <div class="mb-5">
+      <label class="text-[10px] uppercase tracking-wider muted block mb-2">Symbol</label>
+      <select id="set-symbol" class="w-full h-9 px-2 text-sm rounded border border-white/10 bg-white/5">
+        <option value="BTCUSDT">BTCUSDT</option>
+        <option value="ETHUSDT">ETHUSDT</option>
+        <option value="SOLUSDT">SOLUSDT</option>
+        <option value="BNBUSDT">BNBUSDT</option>
+        <option value="XRPUSDT">XRPUSDT</option>
+        <option value="DOGEUSDT">DOGEUSDT</option>
+        <option value="ADAUSDT">ADAUSDT</option>
+        <option value="__custom">Custom...</option>
+      </select>
+      <input id="set-custom-symbol" type="text" placeholder="e.g. AVAXUSDT" class="hidden mt-2 w-full h-9 px-2 text-sm rounded border border-white/10 bg-white/5" />
+    </div>
+
+    <!-- Max Recovery Bars -->
+    <div class="mb-5">
+      <div class="flex items-center justify-between mb-2">
+        <label class="text-[10px] uppercase tracking-wider muted">ทบไม้สูงสุด (แท่ง)</label>
+        <span id="set-nbars-value" class="font-mono text-sm font-semibold">3</span>
+      </div>
+      <input id="set-nbars" type="range" min="1" max="10" step="1" value="3" class="w-full" />
+      <p class="text-[10px] muted mt-2">
+        <span class="green">BUY</span> ชนะถ้ามีแท่งเขียว (close &gt; open) อย่างน้อย 1 แท่งใน <span id="nbars-help">3</span> แท่งถัดไป ·
+        <span class="red">SELL</span> ชนะถ้ามีแท่งแดง (close &lt; open) อย่างน้อย 1 แท่ง
+      </p>
+      <p class="text-[10px] muted mt-1 opacity-70">ชนะเร็ว = ใช้แท่งน้อย (ดีที่สุด) · ชนะช้า = ทบไม้หลายครั้ง · แพ้ = ครบ N แท่งไม่ตรงสัญญาณ</p>
+    </div>
+
+    <!-- Backtest Limit -->
+    <div class="mb-5">
+      <label class="text-[10px] uppercase tracking-wider muted block mb-2">Backtest Limit (bars)</label>
+      <select id="set-limit" class="w-full h-9 px-2 text-sm rounded border border-white/10 bg-white/5">
+        <option value="200">200 bars (~17h)</option>
+        <option value="500">500 bars (~1.7 days)</option>
+        <option value="1000" selected>1000 bars (~3.5 days)</option>
+        <option value="2000">2000 bars (~7 days)</option>
+      </select>
+    </div>
+
+    <!-- Telegram -->
+    <div class="mb-5 rounded-lg border border-white/10 bg-white/5 p-3 space-y-3">
+      <div class="flex items-center justify-between">
+        <label class="text-[10px] uppercase tracking-wider muted">Telegram Alerts</label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="set-tg-enabled" class="sr-only">
+          <div id="tg-track" class="relative w-9 h-5 bg-white/10 rounded-full transition-colors">
+            <div id="tg-thumb" class="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform"></div>
+          </div>
+        </label>
+      </div>
+      <div>
+        <label class="text-[10px] muted block mb-1">Bot Token</label>
+        <input id="set-tg-token" type="password" placeholder="123456:ABC-DEF..." class="w-full h-9 px-2 text-sm font-mono rounded border border-white/10 bg-white/5" />
+      </div>
+      <div>
+        <label class="text-[10px] muted block mb-1">Chat ID</label>
+        <input id="set-tg-chatid" type="text" placeholder="e.g. 123456789 or -100..." class="w-full h-9 px-2 text-sm font-mono rounded border border-white/10 bg-white/5" />
+      </div>
+      <button id="test-tg-btn" class="w-full h-8 text-xs rounded border border-white/10 hover:bg-white/5 transition-colors">Send Test Message</button>
+      <p id="tg-test-status" class="text-xs muted hidden"></p>
+      <p class="text-[10px] muted opacity-70">ข้อมูลจะถูกเก็บใน localStorage ของ browser เท่านั้น — ไม่ส่งไป server อื่น</p>
+    </div>
+
+    <div class="flex justify-end gap-2 pt-2">
+      <button id="cancel-settings" class="px-4 h-8 text-xs rounded border border-white/10 hover:bg-white/5">Cancel</button>
+      <button id="save-settings" class="px-4 h-8 text-xs rounded font-medium" style="background: var(--green); color: var(--bg);">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+/* ============================================================
+ *  Pine Script v5  ->  JavaScript Translation
+ *  Indicator : cRSI + Stoch RSI | Multi-Bar Win Report
+ * ============================================================
+ *  Parameters (จาก TradingView settings screenshot — ค่าล่าสุด):
+ *    Dominant Cycle Length : 13   (domcycle)
+ *    Vibration             : 10
+ *    Leveling              : 10.0
+ *    SmoothK               : 3
+ *    SmoothD               : 3
+ *    RSI Length            : 15   (lengthRSI)
+ *    Stochastic Length     : 10   (lengthStoch)
+ *    Stoch Buy Zone (low)  : 15   (stoch_low)
+ *    Stoch Sell Zone (high): 85   (stoch_high)
+ *
+ *  Derived:
+ *    cyclicmemory = domcycle * 2 = 26
+ *    cyclelen     = Math.floor(domcycle / 2) = 6
+ *
+ *  กฎการแปล (สำคัญมาก):
+ *    1. ta.rma(src, length)  ->  alpha = 1/length  (Wilder's Smoothing)
+ *       ** ห้ามใช้ alpha = 2/(length+1) ซึ่งเป็นของ ta.ema **
+ *    2. ตัวแปร var float ทั้งหมด (crsi, db, ub, last_stoch_k_crossup, last_stoch_k_crossdown)
+ *       คำนวณแบบ bar-by-bar loop เรียงตามเวลา  ** ห้ามใช้ vectorized operation **
+ *    3. nz(x, default) = x ถ้าไม่ใช่ NaN, มิฉะนั้นคืน default
+ *    4. ต้องดึงข้อมูลขั้นต่ำ 200 แท่งเพื่อให้ค่า warmup เสถียร
+ * ============================================================ */
+
+const PARAMS = {
+  domcycle:    13,
+  vibration:   10,
+  leveling:    10.0,
+  smoothK:     3,
+  smoothD:     3,
+  lengthRSI:   15,
+  lengthStoch: 10,
+  stochLow:    15,
+  stochHigh:   85,
+};
+
+const DOMCYCLE     = PARAMS.domcycle;
+const VIBRATION    = PARAMS.vibration;
+const LEVELING     = PARAMS.leveling;
+const CYCLICMEMORY = DOMCYCLE * 2;            // 26
+const CYCLELEN     = Math.floor(DOMCYCLE / 2); // 6  (Pine int())
+
+const SMOOTHK      = PARAMS.smoothK;
+const SMOOTHD      = PARAMS.smoothD;
+const LENGTH_RSI   = PARAMS.lengthRSI;
+const LENGTH_STOCH = PARAMS.lengthStoch;
+const STOCH_LOW    = PARAMS.stochLow;
+const STOCH_HIGH   = PARAMS.stochHigh;
+
+// ===== Helper functions =====
+function isNaNVal(v) { return v === null || v === undefined || Number.isNaN(v); }
+function nz(value, def = 0) { return isNaNVal(value) ? def : value; }
+
+// Wilder's RMA - alpha = 1/length
+function calcRMA(values, length) {
+  const n = values.length;
+  const rma = new Array(n).fill(NaN);
+  let count = 0, startIdx = -1;
+  for (let i = 0; i < n; i++) {
+    if (!isNaNVal(values[i])) {
+      count++;
+      if (count === length) { startIdx = i; break; }
+    } else count = 0;
+  }
+  if (startIdx === -1) return rma;
+  let sum = 0;
+  for (let i = startIdx - length + 1; i <= startIdx; i++) sum += values[i];
+  rma[startIdx] = sum / length;
+  const alpha = 1 / length;
+  for (let i = startIdx + 1; i < n; i++) {
+    const v = values[i];
+    rma[i] = isNaNVal(v) ? rma[i-1] : alpha * v + (1 - alpha) * rma[i-1];
+  }
+  return rma;
+}
+
+function calcSMA(values, length) {
+  const n = values.length;
+  const sma = new Array(n).fill(NaN);
+  for (let i = length - 1; i < n; i++) {
+    let sum = 0, valid = true;
+    for (let j = i - length + 1; j <= i; j++) {
+      if (isNaNVal(values[j])) { valid = false; break; }
+      sum += values[j];
+    }
+    if (valid) sma[i] = sum / length;
+  }
+  return sma;
+}
+
+function calcRSI(src, length) {
+  const n = src.length;
+  const change = new Array(n).fill(NaN);
+  for (let i = 1; i < n; i++) change[i] = src[i] - src[i-1];
+  const upSrc   = change.map(c => isNaNVal(c) ? NaN : Math.max(c, 0));
+  const downSrc = change.map(c => isNaNVal(c) ? NaN : Math.max(-c, 0));
+  const up   = calcRMA(upSrc, length);
+  const down = calcRMA(downSrc, length);
+  const rsi = new Array(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    const u = up[i], d = down[i];
+    if (isNaNVal(u) || isNaNVal(d)) rsi[i] = NaN;
+    else if (d === 0) rsi[i] = 100;
+    else if (u === 0) rsi[i] = 0;
+    else rsi[i] = 100 - 100 / (1 + u / d);
+  }
+  return rsi;
+}
+
+function calcStoch(source, length) {
+  const n = source.length;
+  const stoch = new Array(n).fill(NaN);
+  for (let i = length - 1; i < n; i++) {
+    let lo = Infinity, hi = -Infinity, valid = true;
+    for (let j = i - length + 1; j <= i; j++) {
+      const v = source[j];
+      if (isNaNVal(v)) { valid = false; break; }
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (!valid) continue;
+    stoch[i] = hi === lo ? 100 : 100 * (source[i] - lo) / (hi - lo);
+  }
+  return stoch;
+}
+
+// ===== Main Signal Computation (bar-by-bar, ห้าม vectorize) =====
+function computeSignals(closes) {
+  const src = closes;
+  const n = src.length;
+  const torque     = 2.0 / (VIBRATION + 1);
+  const phasingLag = Math.floor((VIBRATION - 1) / 2);
+  const aperc      = LEVELING / 100.0;
+
+  // [1] RSI for cRSI
+  const change = new Array(n).fill(NaN);
+  for (let i = 1; i < n; i++) change[i] = src[i] - src[i-1];
+  const upSrc   = change.map(c => isNaNVal(c) ? NaN : Math.max(c, 0));
+  const downSrc = change.map(c => isNaNVal(c) ? NaN : Math.max(-c, 0));
+  const up   = calcRMA(upSrc, CYCLELEN);
+  const down = calcRMA(downSrc, CYCLELEN);
+  const rsi = new Array(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    const u = up[i], d = down[i];
+    if (isNaNVal(u) || isNaNVal(d)) rsi[i] = NaN;
+    else if (d === 0) rsi[i] = 100;
+    else if (u === 0) rsi[i] = 0;
+    else rsi[i] = 100 - 100 / (1 + u / d);
+  }
+
+  // [2] cRSI
+  const crsi = new Array(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    const rsiNow = rsi[i];
+    const rsiLag = (i - phasingLag) >= 0 ? rsi[i - phasingLag] : NaN;
+    if (isNaNVal(rsiNow) || isNaNVal(rsiLag)) crsi[i] = NaN;
+    else {
+      const prev = i > 0 ? crsi[i-1] : NaN;
+      const prevNz = isNaNVal(prev) ? 0 : prev;
+      crsi[i] = torque * (2 * rsiNow - rsiLag) + (1 - torque) * prevNz;
+    }
+  }
+
+  // [3] db & ub
+  const db = new Array(n).fill(0);
+  const ub = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    let lmax = -999999, lmin = 999999;
+    for (let j = 0; j < CYCLICMEMORY; j++) {
+      const idx = i - j;
+      if (idx < 0) break;
+      const v = crsi[idx];
+      const vMax = isNaNVal(v) ? -999999 : v;
+      const vMin = isNaNVal(v) ?  999999 : v;
+      if (vMax > lmax) lmax = vMax;
+      if (vMin < lmin) lmin = vMin;
+    }
+    if (lmax === -999999 || lmin === 999999) {
+      if (i > 0) { db[i] = db[i-1]; ub[i] = ub[i-1]; }
+      continue;
+    }
+    const mstep = (lmax - lmin) / 100;
+
+    // db
+    let dbFound = false;
+    for (let step = 0; step <= 100; step++) {
+      const testvalue = lmin + mstep * step;
+      let below = 0;
+      for (let j = 0; j < CYCLICMEMORY; j++) {
+        const idx = i - j;
+        if (idx < 0) break;
+        const v = crsi[idx];
+        if (!isNaNVal(v) && v < testvalue) below++;
+      }
+      if (below / CYCLICMEMORY >= aperc) { db[i] = testvalue; dbFound = true; break; }
+    }
+    if (!dbFound) db[i] = i > 0 ? db[i-1] : 0;
+
+    // ub
+    let ubFound = false;
+    for (let step = 0; step <= 100; step++) {
+      const testvalue = lmax - mstep * step;
+      let above = 0;
+      for (let j = 0; j < CYCLICMEMORY; j++) {
+        const idx = i - j;
+        if (idx < 0) break;
+        const v = crsi[idx];
+        if (!isNaNVal(v) && v >= testvalue) above++;
+      }
+      if (above / CYCLICMEMORY >= aperc) { ub[i] = testvalue; ubFound = true; break; }
+    }
+    if (!ubFound) ub[i] = i > 0 ? ub[i-1] : 0;
+  }
+
+  // [4] Stoch RSI
+  const rsi1 = calcRSI(src, LENGTH_RSI);
+  const stochRaw = calcStoch(rsi1, LENGTH_STOCH);
+  const k = calcSMA(stochRaw, SMOOTHK);
+  const d = calcSMA(k, SMOOTHD);
+
+  // [5] last crossup / crossdown
+  const lastUp = new Array(n).fill(0);
+  const lastDn = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    if (i > 0) { lastUp[i] = lastUp[i-1]; lastDn[i] = lastDn[i-1]; }
+    if (i === 0) continue;
+    const kN = k[i], kP = k[i-1], dN = d[i], dP = d[i-1];
+    if (isNaNVal(kN) || isNaNVal(kP) || isNaNVal(dN) || isNaNVal(dP)) continue;
+    if (kN > dN && kP <= dP) lastUp[i] = kN;
+    if (kN < dN && kP >= dP) lastDn[i] = kN;
+  }
+
+  // [6] Buy / Sell Signals
+  const buySig = new Array(n).fill(false);
+  const sellSig = new Array(n).fill(false);
+  for (let i = 1; i < n; i++) {
+    const cN = crsi[i], cP = crsi[i-1];
+    const dbN = db[i], dbP = db[i-1];
+    const ubN = ub[i], ubP = ub[i-1];
+    const kN = k[i];
+    const lu = lastUp[i], ld = lastDn[i];
+    if (isNaNVal(cN) || isNaNVal(cP) || isNaNVal(dbN) || isNaNVal(dbP) || isNaNVal(ubN) || isNaNVal(ubP) || isNaNVal(kN)) continue;
+    if (cN > dbN && cP <= dbP) {
+      if (lu < STOCH_LOW && kN < STOCH_LOW) buySig[i] = true;
+    }
+    if (cN < ubN && cP >= ubP) {
+      if (ld > STOCH_HIGH && kN > STOCH_HIGH) sellSig[i] = true;
+    }
+  }
+
+  return { crsi, db, ub, k, d, rsi1, buySignals: buySig, sellSignals: sellSig, lastCrossup: lastUp, lastCrossdown: lastDn };
+}
+
+/* ============================================================
+ *  Backtest Engine — ทบไม้ (Martingale Recovery)
+ * ============================================================
+ *  BUY  ชนะถ้า มีแท่งเขียว (close > open) อย่างน้อย 1 แท่งใน N แท่งถัดไป
+ *  SELL ชนะถ้า มีแท่งแดง (close < open) อย่างน้อย 1 แท่งใน N แท่งถัดไป
+ *  ชนะเร็ว → barsHeld น้อย / ชนะช้า → barsHeld มาก / แพ้ → barsHeld = N
+ * ============================================================ */
+function runBacktest(ohlcv, symbol, maxRecoveryBars = 3) {
+  if (ohlcv.length < 200) return { rows: [], summary: emptySummary(), lastSignal: null };
+  const closes = ohlcv.map(b => b.close);
+  const sig = computeSignals(closes);
+  const rows = [];
+  const N = Math.max(1, Math.min(10, maxRecoveryBars));
+
+  for (let i = 0; i < ohlcv.length; i++) {
+    const isBuy = sig.buySignals[i];
+    const isSell = sig.sellSignals[i];
+    if (!isBuy && !isSell) continue;
+    const type = isBuy ? 'BUY' : 'SELL';
+    const entryPrice = ohlcv[i].close;
+    let exitPrice = null, pnlPercent = null, result = 'PENDING', barsHeld = 0;
+
+    for (let j = 1; j <= N; j++) {
+      const idx = i + j;
+      if (idx >= ohlcv.length) break;
+      const bar = ohlcv[idx];
+      const isGreen = bar.close > bar.open;
+      const isRed = bar.close < bar.open;
+      const isMatch = type === 'BUY' ? isGreen : isRed;
+      if (isMatch) {
+        exitPrice = bar.close;
+        barsHeld = j;
+        const diff = exitPrice - entryPrice;
+        pnlPercent = type === 'BUY' ? (diff/entryPrice)*100 : (-diff/entryPrice)*100;
+        result = 'WIN';
+        break;
+      }
+      exitPrice = bar.close;
+      barsHeld = j;
+    }
+    if (result === 'PENDING') {
+      const hasFullNBars = (i + N) < ohlcv.length;
+      if (hasFullNBars && exitPrice !== null) {
+        result = 'LOSS';
+        const diff = exitPrice - entryPrice;
+        pnlPercent = type === 'BUY' ? (diff/entryPrice)*100 : (-diff/entryPrice)*100;
+      } else {
+        result = 'PENDING';
+        exitPrice = null;
+        pnlPercent = null;
+        barsHeld = 0;
+      }
+    }
+    rows.push({
+      barIndex: i,
+      timestamp: ohlcv[i].timestamp,
+      timeISO: new Date(ohlcv[i].timestamp).toISOString(),
+      symbol, type, entryPrice, exitPrice, barsHeld, pnlPercent, result,
+      indicators: {
+        crsi: nz(sig.crsi[i]), db: nz(sig.db[i]), ub: nz(sig.ub[i]),
+        k: nz(sig.k[i]), d: nz(sig.d[i]),
+        lastCrossup: nz(sig.lastCrossup[i]), lastCrossdown: nz(sig.lastCrossdown[i]),
+      },
+    });
+  }
+  rows.sort((a, b) => b.timestamp - a.timestamp);
+  return { rows, summary: buildSummary(rows), lastSignal: rows[0] || null };
+}
+
+function emptySummary() {
+  return { total:0, wins:0, losses:0, pending:0, winRate:0, avgPnlPercent:null,
+           buyCount:0, sellCount:0, buyWinRate:0, sellWinRate:0 };
+}
+
+function buildSummary(rows) {
+  const total = rows.length;
+  const wins = rows.filter(r => r.result === 'WIN').length;
+  const losses = rows.filter(r => r.result === 'LOSS').length;
+  const pending = rows.filter(r => r.result === 'PENDING').length;
+  const settled = wins + losses;
+  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+  const pnlRows = rows.filter(r => r.pnlPercent !== null);
+  const avgPnl = pnlRows.length > 0 ? pnlRows.reduce((s, r) => s + r.pnlPercent, 0) / pnlRows.length : null;
+  const buyRows = rows.filter(r => r.type === 'BUY');
+  const sellRows = rows.filter(r => r.type === 'SELL');
+  const buySettled = buyRows.filter(r => r.result === 'WIN' || r.result === 'LOSS').length;
+  const sellSettled = sellRows.filter(r => r.result === 'WIN' || r.result === 'LOSS').length;
+  return {
+    total, wins, losses, pending, winRate, avgPnlPercent: avgPnl,
+    buyCount: buyRows.length, sellCount: sellRows.length,
+    buyWinRate: buySettled > 0 ? (buyRows.filter(r => r.result === 'WIN').length / buySettled) * 100 : 0,
+    sellWinRate: sellSettled > 0 ? (sellRows.filter(r => r.result === 'WIN').length / sellSettled) * 100 : 0,
+  };
+}
+
+function buildCumulativeWinRate(rows) {
+  const sorted = [...rows].sort((a, b) => a.timestamp - b.timestamp);
+  const points = [];
+  let wins = 0, settled = 0;
+  sorted.forEach(r => {
+    if (r.result === 'WIN' || r.result === 'LOSS') {
+      settled++;
+      if (r.result === 'WIN') wins++;
+      points.push({ signalCount: settled, winRate: settled > 0 ? (wins/settled)*100 : 0, timestamp: r.timestamp });
+    }
+  });
+  return points;
+}
+
+/* ============================================================
+ *  Bybit API Client
+ * ============================================================ */
+async function fetchOHLCV(symbol = 'BTCUSDT', interval = '5', limit = 1000) {
+  const url = 'https://api.bybit.com/v5/market/kline';
+  const params = new URLSearchParams({ category: 'linear', symbol, interval, limit: String(limit) });
+  const resp = await fetch(`${url}?${params}`, { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
+  if (!resp.ok) throw new Error(`Bybit API HTTP ${resp.status}: ${resp.statusText}`);
+  const data = await resp.json();
+  if (data.retCode !== 0) throw new Error(`Bybit API error: ${data.retMsg || 'Unknown'}`);
+  const klines = data.result?.list || [];
+  if (klines.length === 0) throw new Error('Bybit API returned empty kline list');
+  klines.reverse();
+  return klines.map(kl => ({
+    timestamp: parseInt(kl[0], 10),
+    open: parseFloat(kl[1]), high: parseFloat(kl[2]),
+    low: parseFloat(kl[3]), close: parseFloat(kl[4]),
+    volume: parseFloat(kl[5]),
+  }));
+}
+
+function getLastClosedBarIndex(ohlcv, tfMinutes) {
+  if (ohlcv.length === 0) return -1;
+  if (ohlcv.length === 1) return 0;
+  const nowMs = Date.now();
+  const lastBarOpen = ohlcv[ohlcv.length - 1].timestamp;
+  const lastBarClose = lastBarOpen + tfMinutes * 60 * 1000;
+  return nowMs >= lastBarClose + 5000 ? ohlcv.length - 1 : ohlcv.length - 2;
+}
+
+/* ============================================================
+ *  Telegram
+ * ============================================================ */
+function loadTelegramConfig() {
+  try {
+    const raw = localStorage.getItem('telegram_config');
+    if (!raw) return null;
+    const cfg = JSON.parse(raw);
+    if (typeof cfg.botToken === 'string' && typeof cfg.chatId === 'string' && typeof cfg.enabled === 'boolean') return cfg;
+    return null;
+  } catch { return null; }
+}
+
+function saveTelegramConfig(cfg) {
+  localStorage.setItem('telegram_config', JSON.stringify(cfg));
+}
+
+async function sendTelegramMessage(cfg, message) {
+  if (!cfg.botToken || !cfg.chatId) return { ok: false, error: 'Bot token หรือ Chat ID ไม่ครบ' };
+  const url = `https://api.telegram.org/bot${cfg.botToken}/sendMessage`;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: cfg.chatId, text: message, parse_mode: 'HTML', disable_web_page_preview: true }),
+    });
+    if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}: ${await resp.text()}` };
+    const data = await resp.json();
+    return data.ok ? { ok: true } : { ok: false, error: data.description || 'Unknown error' };
+  } catch (err) { return { ok: false, error: String(err) }; }
+}
+
+function buildSignalMessage(p) {
+  const emoji = p.type === 'BUY' ? '🟢' : '🔴';
+  const closeStr = p.close.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${emoji} <b>${p.type} SIGNAL</b>
+---------------------------
+Symbol : <b>${p.symbol}</b>
+TF     : ${p.timeframe}
+Bar    : ${p.timeISO}
+Close  : ${closeStr}
+---------------------------
+cRSI   : ${p.crsi.toFixed(4)}
+db     : ${p.db.toFixed(4)}
+ub     : ${p.ub.toFixed(4)}
+Stoch K: ${p.k.toFixed(4)}
+Stoch D: ${p.d.toFixed(4)}
+LastCrossUp  : ${p.lastCrossup.toFixed(4)}
+LastCrossDown: ${p.lastCrossdown.toFixed(4)}`;
+}
+
+/* ============================================================
+ *  State Management (Global + localStorage)
+ * ============================================================ */
+const STATE = {
+  symbol: localStorage.getItem('cfg_symbol') || 'BTCUSDT',
+  timeframe: '5',
+  timeframeMinutes: 5,
+  backtestLimit: parseInt(localStorage.getItem('cfg_limit') || '1000', 10),
+  nBarsForward: parseInt(localStorage.getItem('cfg_nbars') || '3', 10),
+  telegram: loadTelegramConfig(),
+  autoRefresh: true,
+  nextRefreshAt: null,
+  countdown: 0,
+  loading: false,
+  error: null,
+  lastUpdated: null,
+  ohlcv: [],
+  rows: [],
+  summary: emptySummary(),
+  cumulative: [],
+  liveSignal: null,
+  prevRows: [],
+  chartView: 'winrate',
+};
+
+let perfChart = null;
+
+/* ============================================================
+ *  Render Functions
+ * ============================================================ */
+function fmtTime(ts) {
+  const d = new Date(ts + 7 * 3600 * 1000);
+  return d.toISOString().replace('T', ' ').slice(0, 19) + ' ICT';
+}
+
+function fmtNum(v, digits = 4) {
+  if (!isFinite(v) || isNaN(v)) return '-';
+  return v.toFixed(digits);
+}
+
+function fmtPrice(v) {
+  return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function renderLiveSignal() {
+  const el = document.getElementById('ls-content');
+  document.getElementById('ls-symbol').textContent = STATE.symbol;
+  document.getElementById('ls-tf').textContent = STATE.timeframeMinutes + 'm';
+  document.getElementById('header-subtitle').textContent = `${STATE.symbol} · ${STATE.timeframeMinutes}m · ทบไม้ W/L`;
+
+  if (!STATE.liveSignal) {
+    el.innerHTML = `
+      <div class="flex flex-col items-center justify-center h-32 muted gap-2">
+        <div class="text-4xl">⚪</div>
+        <div class="text-sm">No signal in the data range</div>
+      </div>`;
+    return;
+  }
+  const s = STATE.liveSignal;
+  const isBuy = s.type === 'BUY';
+  const bg = isBuy ? 'bg-green-soft' : 'bg-red-soft';
+  const color = isBuy ? 'green' : 'red';
+  const arrow = isBuy ? '▲' : '▼';
+
+  el.innerHTML = `
+    <div class="space-y-4">
+      <div class="flex items-center gap-4">
+        <div class="flex h-16 w-16 items-center justify-center rounded-xl text-3xl font-bold ${bg}" style="ring: 2px solid currentColor;">
+          ${arrow}
+        </div>
+        <div class="flex-1">
+          <div class="text-3xl font-bold tracking-tight ${color}">${s.type}</div>
+          <div class="text-xs muted">${fmtTime(s.timestamp)}  ·  ${s.barsAgo} bars ago</div>
+        </div>
+        <div class="text-right">
+          <div class="text-xs muted">Close</div>
+          <div class="text-lg font-semibold tabular-nums">${fmtPrice(s.close)}</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        ${ind('cRSI', fmtNum(s.crsi))}
+        ${ind('db', fmtNum(s.db), 'green')}
+        ${ind('ub', fmtNum(s.ub), 'red')}
+        ${ind('Stoch K', fmtNum(s.k))}
+        ${ind('Stoch D', fmtNum(s.d))}
+        ${ind('LastUp', fmtNum(s.lastCrossup))}
+        ${ind('LastDn', fmtNum(s.lastCrossdown))}
+        ${ind('Updated', STATE.lastUpdated ? fmtTime(STATE.lastUpdated) : '-')}
+      </div>
+    </div>`;
+}
+
+function ind(label, value, accent) {
+  const color = accent === 'green' ? 'green' : accent === 'red' ? 'red' : '';
+  return `
+    <div class="rounded px-3 py-2 border border-white/5" style="background: rgba(255,255,255,0.03);">
+      <div class="text-[10px] uppercase tracking-wider muted">${label}</div>
+      <div class="font-mono text-sm font-semibold tabular-nums ${color}">${value}</div>
+    </div>`;
+}
+
+function renderStatsBar() {
+  const s = STATE.summary;
+  const stats = [
+    { label: 'Total', value: s.total, color: '' },
+    { label: 'Wins', value: s.wins, color: 'green' },
+    { label: 'Losses', value: s.losses, color: 'red' },
+    { label: 'Pending', value: s.pending, color: 'yellow' },
+    { label: 'Win Rate', value: s.winRate.toFixed(1) + '%', color: s.winRate >= 60 ? 'green' : s.winRate >= 40 ? 'yellow' : 'red' },
+    { label: 'Avg P&L', value: s.avgPnlPercent === null ? '-' : (s.avgPnlPercent >= 0 ? '+' : '') + s.avgPnlPercent.toFixed(3) + '%', color: s.avgPnlPercent === null ? '' : s.avgPnlPercent >= 0 ? 'green' : 'red' },
+    { label: 'Buy / Sell', value: `${s.buyCount} / ${s.sellCount}`, color: '' },
+    { label: 'Buy WR', value: s.buyWinRate.toFixed(1) + '%', color: 'green' },
+    { label: 'Sell WR', value: s.sellWinRate.toFixed(1) + '%', color: 'red' },
+  ];
+  document.getElementById('stats-bar').innerHTML = stats.map(st => `
+    <div class="card rounded-lg px-4 py-3">
+      <div class="text-[10px] uppercase tracking-wider muted">${st.label}</div>
+      <div class="mt-1 font-mono text-xl font-bold tabular-nums ${st.color}">${st.value}</div>
+    </div>
+  `).join('');
+}
+
+function renderTable() {
+  const filter = document.getElementById('filter-select').value;
+  const search = document.getElementById('search-input').value.toLowerCase();
+  const filtered = STATE.rows.filter(r => {
+    if (filter === 'BUY' && r.type !== 'BUY') return false;
+    if (filter === 'SELL' && r.type !== 'SELL') return false;
+    if (filter === 'WIN' && r.result !== 'WIN') return false;
+    if (filter === 'LOSS' && r.result !== 'LOSS') return false;
+    if (filter === 'PENDING' && r.result !== 'PENDING') return false;
+    if (search && !r.symbol.toLowerCase().includes(search) && !r.type.toLowerCase().includes(search) && !fmtTime(r.timestamp).toLowerCase().includes(search)) return false;
+    return true;
+  });
+  document.getElementById('table-count').textContent = `(${filtered.length} / ${STATE.rows.length})`;
+
+  const tbody = document.getElementById('signal-tbody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="11" class="py-12 text-center muted">No signals match the current filter.</td></tr>`;
+    return;
+  }
+  // Update filter options counts
+  const sel = document.getElementById('filter-select');
+  sel.querySelector('option[value="ALL"]').textContent = `All (${STATE.rows.length})`;
+  sel.querySelector('option[value="BUY"]').textContent = `Buy (${STATE.summary.buyCount})`;
+  sel.querySelector('option[value="SELL"]').textContent = `Sell (${STATE.summary.sellCount})`;
+  sel.querySelector('option[value="WIN"]').textContent = `Win (${STATE.summary.wins})`;
+  sel.querySelector('option[value="LOSS"]').textContent = `Loss (${STATE.summary.losses})`;
+  sel.querySelector('option[value="PENDING"]').textContent = `Pending (${STATE.summary.pending})`;
+
+  tbody.innerHTML = filtered.map(r => {
+    const isBuy = r.type === 'BUY';
+    const resultBadge = r.result === 'WIN'
+      ? `<span class="bg-green-soft px-2 py-0.5 rounded text-[10px] font-bold">WIN</span>`
+      : r.result === 'LOSS'
+      ? `<span class="bg-red-soft px-2 py-0.5 rounded text-[10px] font-bold">LOSS</span>`
+      : `<span class="bg-yellow-soft px-2 py-0.5 rounded text-[10px] font-bold">PENDING</span>`;
+    const pnlText = r.pnlPercent === null ? '-' : (r.pnlPercent >= 0 ? '+' : '') + r.pnlPercent.toFixed(3) + '%';
+    const pnlColor = r.pnlPercent === null ? 'muted' : r.pnlPercent >= 0 ? 'green' : 'red';
+    return `
+      <tr class="border-b border-white/5 hover:bg-white/5 transition-colors">
+        <td class="px-3 py-2 font-mono text-[11px] muted">${fmtTime(r.timestamp)}</td>
+        <td class="px-3 py-2 font-mono">${r.symbol}</td>
+        <td class="px-3 py-2 text-center">
+          <span class="inline-block rounded px-2 py-0.5 text-[10px] font-bold ${isBuy ? 'bg-green-soft' : 'bg-red-soft'}">${r.type}</span>
+        </td>
+        <td class="px-3 py-2 text-right font-mono tabular-nums">${fmtPrice(r.entryPrice)}</td>
+        <td class="px-3 py-2 text-right font-mono tabular-nums">${r.exitPrice !== null ? fmtPrice(r.exitPrice) : '-'}</td>
+        <td class="px-3 py-2 text-center font-mono muted">${r.barsHeld || '-'}</td>
+        <td class="px-3 py-2 text-right font-mono font-semibold tabular-nums ${pnlColor}">${pnlText}</td>
+        <td class="px-3 py-2 text-center">${resultBadge}</td>
+        <td class="px-3 py-2 text-right font-mono text-[11px] muted">${r.indicators.crsi.toFixed(2)}</td>
+        <td class="px-3 py-2 text-right font-mono text-[11px] muted">${r.indicators.k.toFixed(2)}</td>
+        <td class="px-3 py-2 text-right font-mono text-[11px] muted">${r.indicators.d.toFixed(2)}</td>
+      </tr>`;
+  }).join('');
+}
+
+function renderChart() {
+  const ctx = document.getElementById('perf-chart').getContext('2d');
+  if (perfChart) perfChart.destroy();
+
+  let data, label, color, yMin, yMax, yTicks;
+  if (STATE.chartView === 'winrate') {
+    data = STATE.cumulative.map(p => ({ x: p.signalCount, y: p.winRate }));
+    label = 'Win Rate %';
+    color = '#00d4aa';
+    yMin = 0; yMax = 100;
+    yTicks = [0, 25, 50, 75, 100];
+  } else {
+    const pnlSeries = STATE.rows
+      .filter(r => r.result === 'WIN' || r.result === 'LOSS')
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((r, i) => ({ x: i + 1, y: r.pnlPercent, type: r.type, result: r.result }));
+    data = pnlSeries;
+    label = 'P&L %';
+    color = '#3b82f6';
+  }
+
+  perfChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [{
+        label,
+        data,
+        borderColor: color,
+        backgroundColor: color + '20',
+        borderWidth: STATE.chartView === 'winrate' ? 2 : 1.5,
+        pointRadius: STATE.chartView === 'winrate' ? 0 : 2.5,
+        pointBackgroundColor: (ctx) => {
+          if (STATE.chartView === 'winrate') return color;
+          const r = ctx.raw;
+          return r && r.result === 'WIN' ? '#10b981' : '#ef4444';
+        },
+        tension: 0.1,
+        fill: STATE.chartView === 'winrate',
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#0a0e1a',
+          borderColor: 'rgba(255,255,255,0.1)',
+          borderWidth: 1,
+          titleColor: '#6b7280',
+          bodyColor: '#e4e7ec',
+          callbacks: {
+            title: (items) => `Signal #${items[0].raw.x}`,
+            label: (item) => {
+              if (STATE.chartView === 'winrate') return `Win Rate: ${item.raw.y.toFixed(2)}%`;
+              const r = item.raw;
+              return `P&L: ${r.y.toFixed(3)}%  (${r.type} · ${r.result})`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#6b7280', font: { size: 11 } },
+          title: { display: true, text: 'Signal #', color: '#6b7280', font: { size: 10 } }
+        },
+        y: {
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#6b7280', font: { size: 11 },
+            callback: (v) => STATE.chartView === 'winrate' ? v + '%' : v.toFixed(2) + '%' },
+          ...(STATE.chartView === 'winrate' ? { min: 0, max: 100 } : {})
+        }
+      }
+    }
+  });
+}
+
+function renderFooter() {
+  document.getElementById('last-updated').textContent = STATE.lastUpdated ? fmtTime(STATE.lastUpdated) : (STATE.loading ? 'Loading...' : 'Never');
+}
+
+function renderAll() {
+  renderLiveSignal();
+  renderStatsBar();
+  renderTable();
+  renderChart();
+  renderFooter();
+}
+
+/* ============================================================
+ *  Main Refresh Logic
+ * ============================================================ */
+async function refresh() {
+  STATE.loading = true;
+  STATE.error = null;
+  document.getElementById('ls-loading').classList.remove('hidden');
+  document.getElementById('refresh-icon').classList.add('spinner');
+  document.getElementById('error-banner').classList.add('hidden');
+
+  try {
+    const ohlcv = await fetchOHLCV(STATE.symbol, STATE.timeframe, STATE.backtestLimit);
+    const result = runBacktest(ohlcv, STATE.symbol, STATE.nBarsForward);
+    const cumulative = buildCumulativeWinRate(result.rows);
+
+    // Compute live signal — find most recent signal from last closed bar going backwards
+    let liveSignal = null;
+    const lastClosedIdx = getLastClosedBarIndex(ohlcv, STATE.timeframeMinutes);
+    if (lastClosedIdx >= 0) {
+      const closes = ohlcv.map(b => b.close);
+      const sig = computeSignals(closes);
+      let foundIdx = -1, foundType = null;
+      for (let i = lastClosedIdx; i >= 0; i--) {
+        if (sig.buySignals[i])  { foundIdx = i; foundType = 'BUY';  break; }
+        if (sig.sellSignals[i]) { foundIdx = i; foundType = 'SELL'; break; }
+      }
+      if (foundIdx >= 0 && foundType) {
+        liveSignal = {
+          type: foundType,
+          timestamp: ohlcv[foundIdx].timestamp,
+          close: ohlcv[foundIdx].close,
+          crsi: nz(sig.crsi[foundIdx]),
+          db: nz(sig.db[foundIdx]),
+          ub: nz(sig.ub[foundIdx]),
+          k: nz(sig.k[foundIdx]),
+          d: nz(sig.d[foundIdx]),
+          lastCrossup: nz(sig.lastCrossup[foundIdx]),
+          lastCrossdown: nz(sig.lastCrossdown[foundIdx]),
+          barsAgo: lastClosedIdx - foundIdx,
+        };
+      }
+
+      // Send Telegram alert if NEW signal detected
+      const prevLatest = STATE.prevRows[0];
+      const isNewSignal = result.rows.length > 0 && (!prevLatest || result.rows[0].timestamp > prevLatest.timestamp);
+      if (isNewSignal && STATE.telegram?.enabled && result.rows[0]) {
+        const r = result.rows[0];
+        const msg = buildSignalMessage({
+          symbol: STATE.symbol,
+          timeframe: `${STATE.timeframeMinutes}m`,
+          type: r.type,
+          timeISO: new Date(r.timestamp).toISOString(),
+          close: r.entryPrice,
+          crsi: r.indicators.crsi, db: r.indicators.db, ub: r.indicators.ub,
+          k: r.indicators.k, d: r.indicators.d,
+          lastCrossup: r.indicators.lastCrossup, lastCrossdown: r.indicators.lastCrossdown,
+        });
+        sendTelegramMessage(STATE.telegram, msg).catch(err => console.error('Telegram send failed:', err));
+      }
+    }
+
+    STATE.ohlcv = ohlcv;
+    STATE.rows = result.rows;
+    STATE.summary = result.summary;
+    STATE.cumulative = cumulative;
+    STATE.liveSignal = liveSignal;
+    STATE.lastUpdated = Date.now();
+    STATE.nextRefreshAt = Date.now() + 5 * 60 * 1000;
+    STATE.countdown = 300;
+    STATE.prevRows = result.rows;
+  } catch (err) {
+    STATE.error = err instanceof Error ? err.message : String(err);
+    document.getElementById('error-msg').textContent = STATE.error;
+    document.getElementById('error-banner').classList.remove('hidden');
+  } finally {
+    STATE.loading = false;
+    document.getElementById('ls-loading').classList.add('hidden');
+    document.getElementById('refresh-icon').classList.remove('spinner');
+    renderAll();
+  }
+}
+
+/* ============================================================
+ *  Auto Refresh (countdown timer)
+ * ============================================================ */
+function startAutoRefresh() {
+  setInterval(() => {
+    if (!STATE.autoRefresh) return;
+    const target = STATE.nextRefreshAt;
+    if (!target) return;
+    const remaining = Math.max(0, Math.floor((target - Date.now()) / 1000));
+    STATE.countdown = remaining;
+    const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+    const ss = String(remaining % 60).padStart(2, '0');
+    document.getElementById('countdown-badge').textContent = `${mm}:${ss}`;
+    if (remaining <= 0) refresh();
+  }, 1000);
+}
+
+/* ============================================================
+ *  Settings Modal
+ * ============================================================ */
+function openSettings() {
+  document.getElementById('set-symbol').value = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT'].includes(STATE.symbol) ? STATE.symbol : '__custom';
+  document.getElementById('set-custom-symbol').classList.toggle('hidden', !['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT'].includes(STATE.symbol));
+  if (!['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','ADAUSDT'].includes(STATE.symbol)) {
+    document.getElementById('set-custom-symbol').value = STATE.symbol;
+  }
+  document.getElementById('set-nbars').value = STATE.nBarsForward;
+  document.getElementById('set-nbars-value').textContent = STATE.nBarsForward;
+  document.getElementById('nbars-help').textContent = STATE.nBarsForward;
+  document.getElementById('set-limit').value = String(STATE.backtestLimit);
+  document.getElementById('set-tg-token').value = STATE.telegram?.botToken || '';
+  document.getElementById('set-tg-chatid').value = STATE.telegram?.chatId || '';
+  document.getElementById('set-tg-enabled').checked = STATE.telegram?.enabled || false;
+  updateTgToggle();
+  document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+function closeSettings() {
+  document.getElementById('settings-modal').classList.add('hidden');
+}
+
+function updateTgToggle() {
+  const on = document.getElementById('set-tg-enabled').checked;
+  const track = document.getElementById('tg-track');
+  const thumb = document.getElementById('tg-thumb');
+  track.style.background = on ? 'var(--green)' : 'rgba(255,255,255,0.1)';
+  thumb.style.transform = on ? 'translateX(16px)' : 'translateX(0)';
+}
+
+function updateAutoToggle() {
+  const on = document.getElementById('auto-refresh-toggle').checked;
+  const track = document.getElementById('auto-refresh-track');
+  const thumb = document.getElementById('auto-refresh-thumb');
+  track.style.background = on ? 'var(--green)' : 'rgba(255,255,255,0.1)';
+  thumb.style.transform = on ? 'translateX(16px)' : 'translateX(0)';
+  STATE.autoRefresh = on;
+  if (on) {
+    STATE.nextRefreshAt = Date.now() + 5 * 60 * 1000;
+    STATE.countdown = 300;
+  } else {
+    STATE.nextRefreshAt = null;
+    document.getElementById('countdown-badge').textContent = '--:--';
+  }
+}
+
+function saveSettings() {
+  // Symbol
+  const sel = document.getElementById('set-symbol').value;
+  if (sel === '__custom') {
+    const custom = document.getElementById('set-custom-symbol').value.trim().toUpperCase();
+    if (custom) STATE.symbol = custom;
+  } else {
+    STATE.symbol = sel;
+  }
+  localStorage.setItem('cfg_symbol', STATE.symbol);
+
+  // N Bars
+  STATE.nBarsForward = parseInt(document.getElementById('set-nbars').value, 10);
+  localStorage.setItem('cfg_nbars', String(STATE.nBarsForward));
+
+  // Limit
+  STATE.backtestLimit = parseInt(document.getElementById('set-limit').value, 10);
+  localStorage.setItem('cfg_limit', String(STATE.backtestLimit));
+
+  // Telegram
+  const token = document.getElementById('set-tg-token').value.trim();
+  const chatId = document.getElementById('set-tg-chatid').value.trim();
+  const enabled = document.getElementById('set-tg-enabled').checked;
+  if (token && chatId) {
+    STATE.telegram = { botToken: token, chatId, enabled };
+    saveTelegramConfig(STATE.telegram);
+  } else if (!token && !chatId) {
+    STATE.telegram = null;
+    localStorage.removeItem('telegram_config');
+  }
+
+  closeSettings();
+  refresh();
+}
+
+async function testTelegram() {
+  const status = document.getElementById('tg-test-status');
+  status.classList.remove('hidden');
+  status.textContent = 'Sending...';
+  status.className = 'text-xs yellow';
+  try {
+    const cfg = {
+      botToken: document.getElementById('set-tg-token').value.trim(),
+      chatId: document.getElementById('set-tg-chatid').value.trim(),
+      enabled: true,
+    };
+    const r = await sendTelegramMessage(cfg, '✅ Test message from Signal Bot');
+    if (r.ok) {
+      status.textContent = '✅ Sent successfully!';
+      status.className = 'text-xs green';
+    } else {
+      status.textContent = '❌ ' + r.error;
+      status.className = 'text-xs red';
+    }
+  } catch (err) {
+    status.textContent = '❌ ' + String(err);
+    status.className = 'text-xs red';
+  }
+  setTimeout(() => status.classList.add('hidden'), 5000);
+}
+
+/* ============================================================
+ *  CSV Export
+ * ============================================================ */
+function exportCSV() {
+  const rows = STATE.rows;
+  const headers = ['time','symbol','type','entry','exit','bars_held','pnl_percent','result','crsi','db','ub','k','d','last_crossup','last_crossdown'];
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push([
+      new Date(r.timestamp).toISOString(),
+      r.symbol, r.type, r.entryPrice, r.exitPrice ?? '', r.barsHeld,
+      r.pnlPercent ?? '', r.result,
+      r.indicators.crsi, r.indicators.db, r.indicators.ub,
+      r.indicators.k, r.indicators.d,
+      r.indicators.lastCrossup, r.indicators.lastCrossdown,
+    ].join(','));
+  }
+  const csv = lines.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `signals_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ============================================================
+ *  Event Bindings
+ * ============================================================ */
+document.getElementById('refresh-btn').addEventListener('click', refresh);
+document.getElementById('settings-btn').addEventListener('click', openSettings);
+document.getElementById('close-modal').addEventListener('click', closeSettings);
+document.getElementById('cancel-settings').addEventListener('click', closeSettings);
+document.getElementById('save-settings').addEventListener('click', saveSettings);
+document.getElementById('test-tg-btn').addEventListener('click', testTelegram);
+document.getElementById('export-csv-btn').addEventListener('click', exportCSV);
+
+document.getElementById('auto-refresh-toggle').addEventListener('change', updateAutoToggle);
+document.getElementById('set-tg-enabled').addEventListener('change', updateTgToggle);
+
+document.getElementById('set-symbol').addEventListener('change', (e) => {
+  document.getElementById('set-custom-symbol').classList.toggle('hidden', e.target.value !== '__custom');
+});
+
+document.getElementById('set-nbars').addEventListener('input', (e) => {
+  document.getElementById('set-nbars-value').textContent = e.target.value;
+  document.getElementById('nbars-help').textContent = e.target.value;
+});
+
+document.getElementById('filter-select').addEventListener('change', renderTable);
+document.getElementById('search-input').addEventListener('input', renderTable);
+
+document.getElementById('tab-winrate').addEventListener('click', () => {
+  STATE.chartView = 'winrate';
+  document.getElementById('tab-winrate').classList.add('bg-white/10');
+  document.getElementById('tab-pnl').classList.remove('bg-white/10');
+  renderChart();
+});
+document.getElementById('tab-pnl').addEventListener('click', () => {
+  STATE.chartView = 'pnl';
+  document.getElementById('tab-pnl').classList.add('bg-white/10');
+  document.getElementById('tab-winrate').classList.remove('bg-white/10');
+  renderChart();
+});
+
+// Close modal on backdrop click
+document.getElementById('settings-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'settings-modal') closeSettings();
+});
+
+// Init
+updateAutoToggle();
+refresh();
+startAutoRefresh();
+</script>
+
+</body>
+</html>
